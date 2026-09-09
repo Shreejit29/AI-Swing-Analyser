@@ -1,7 +1,8 @@
 """
 AI Swing Analyser — Research package.
 
-Public exports for the research and validation framework.
+Public exports for the research, validation, model-selection,
+integration, and approval framework.
 """
 
 from .config import (
@@ -28,6 +29,14 @@ from .research_config import (
     IntegratedTradingConfig,
     IntegratedValidationConfig,
     default_integrated_research_config,
+)
+
+from .model_selection import (
+    ControlledModelSelector,
+    ModelCandidateScore,
+    ModelSelectionConfig,
+    ModelSelectionResult,
+    select_best_model,
 )
 
 from .pipeline import (
@@ -60,6 +69,13 @@ __all__ = [
     "IntegratedTradingConfig",
     "IntegratedValidationConfig",
     "default_integrated_research_config",
+
+    # Controlled model selection
+    "ControlledModelSelector",
+    "ModelCandidateScore",
+    "ModelSelectionConfig",
+    "ModelSelectionResult",
+    "select_best_model",
 
     # Research pipeline
     "ResearchPipeline",
