@@ -1,67 +1,68 @@
 """
-AI Swing Analyser - Research Orchestration Package.
+AI Swing Analyser — Research package.
 
-The research package coordinates the complete model-development workflow:
-
-    Data
-      ↓
-    Quality Control
-      ↓
-    Feature Engineering
-      ↓
-    Target Construction
-      ↓
-    Temporal Splitting
-      ↓
-    Feature Selection
-      ↓
-    Hyperparameter Search
-      ↓
-    Walk-Forward Validation
-      ↓
-    Probability Calibration
-      ↓
-    Target-Range Validation
-      ↓
-    Regime Stability
-      ↓
-    Walk-Forward Backtest
-      ↓
-    Robustness Testing
-      ↓
-    Production Approval
-      ↓
-    Model Registry
-
-The package is intentionally separate from:
-
-    src.models
-        Individual model implementations
-
-    src.data
-        Data acquisition and preparation
-
-    src.features
-        Feature engineering
-
-    src.evaluation
-        Reporting and visualisation
-
-This separation reduces accidental coupling and makes it possible to
-test every stage independently.
+Public exports for the research and validation framework.
 """
 
 from .config import (
+    ResearchApprovalConfig,
+    ResearchBacktestConfig,
+    ResearchCalibrationConfig,
+    ResearchFeatureConfig,
+    ResearchHyperparameterConfig,
     ResearchPipelineConfig,
+    ResearchRangeConfig,
+    ResearchRobustnessConfig,
+    ResearchValidationConfig,
+)
+
+from .research_config import (
+    IntegratedApprovalConfig,
+    IntegratedBacktestConfig,
+    IntegratedCalibrationConfig,
+    IntegratedHoldoutConfig,
+    IntegratedRangeConfig,
+    IntegratedRegimeConfig,
+    IntegratedResearchConfig,
+    IntegratedRobustnessConfig,
+    IntegratedTradingConfig,
+    IntegratedValidationConfig,
+    default_integrated_research_config,
 )
 
 from .pipeline import (
     ResearchPipeline,
     ResearchPipelineResult,
+    ResearchStage,
 )
 
 __all__ = [
+    # Existing research configuration
+    "ResearchApprovalConfig",
+    "ResearchBacktestConfig",
+    "ResearchCalibrationConfig",
+    "ResearchFeatureConfig",
+    "ResearchHyperparameterConfig",
     "ResearchPipelineConfig",
+    "ResearchRangeConfig",
+    "ResearchRobustnessConfig",
+    "ResearchValidationConfig",
+
+    # Integrated configuration
+    "IntegratedApprovalConfig",
+    "IntegratedBacktestConfig",
+    "IntegratedCalibrationConfig",
+    "IntegratedHoldoutConfig",
+    "IntegratedRangeConfig",
+    "IntegratedRegimeConfig",
+    "IntegratedResearchConfig",
+    "IntegratedRobustnessConfig",
+    "IntegratedTradingConfig",
+    "IntegratedValidationConfig",
+    "default_integrated_research_config",
+
+    # Research pipeline
     "ResearchPipeline",
     "ResearchPipelineResult",
+    "ResearchStage",
 ]
