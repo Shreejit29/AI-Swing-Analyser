@@ -1,734 +1,416 @@
 """
-AI Swing Analyser - Research Dataset Builder.
+Research dataset construction.
 
-Builds a model-ready research dataset from historical market data.
+This module creates the dataset used by the research pipeline while
+enforcing strict separation between:
 
-Pipeline:
+    raw market data
+        -> engineered features
+        -> future targets
 
-    Historical OHLCV
-        ↓
-    Quality control
-        ↓
-    Feature engineering
-        ↓
-    Target construction
-        ↓
-    Leakage checks
-        ↓
-    Research dataset
-
-The final holdout is NOT created here.
-Temporal partitioning belongs to the validation layer.
-
-Important:
-    Future values are allowed only inside target columns.
-    They must never enter the feature matrix.
+The dataset builder is intentionally conservative. A dataset that fails
+the leakage audit must not proceed to model development.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Callable, Sequence
 
 import numpy as np
 import pandas as pd
 
-from src.data.pipeline import (
-    build_historical_dataset,
-)
-
-from src.features.engine import (
-    engineer_features,
-)
-
-from src.models.targets import (
-    TargetSpec,
-    build_targets,
-)
-
-from .config import (
-    ResearchPipelineConfig,
+from src.data.quality import QualityReport, assert_quality, validate_ohlcv
+from src.features.engine import engineer_features
+from src.models.targets import TargetSpec, build_all_targets
+from src.research.leakage_audit import (
+    LeakageAuditConfig,
+    LeakageAuditReport,
+    assert_leakage_free,
+    audit_research_dataset,
 )
 
 
-# ----------------------------------------------------------------------
-# Result container
-# ----------------------------------------------------------------------
-
-
-@dataclass
+@dataclass(frozen=True)
 class ResearchDatasetResult:
     """
-    Output of the research dataset builder.
+    Result produced by the research dataset builder.
     """
 
+    data: pd.DataFrame
+    feature_columns: tuple[str, ...]
+    target_columns: tuple[str, ...]
     symbol: str
-
     timeframe: str
+    horizons: tuple[int, ...]
 
-    dataframe: pd.DataFrame
+    quality_report: QualityReport | None = None
+    leakage_report: LeakageAuditReport | None = None
 
-    feature_columns: list[str] = field(
-        default_factory=list
-    )
-
-    target_columns: list[str] = field(
-        default_factory=list
-    )
-
-    horizons: tuple[int, ...] = field(
+    warnings: tuple[str, ...] = field(
         default_factory=tuple
     )
-
-    start: pd.Timestamp | None = None
-
-    end: pd.Timestamp | None = None
-
-    rows: int = 0
-
-    warnings: list[str] = field(
-        default_factory=list
-    )
-
-    metadata: dict[str, Any] = field(
+    metadata: dict = field(
         default_factory=dict
     )
 
     @property
-    def feature_count(self) -> int:
-        return len(
-            self.feature_columns
-        )
+    def rows(self) -> int:
+        return len(self.data)
 
     @property
-    def target_count(self) -> int:
-        return len(
-            self.target_columns
-        )
+    def passed(self) -> bool:
+        if self.quality_report is not None:
+            if not self.quality_report.passed:
+                return False
 
-    def summary(self) -> dict[str, Any]:
+        if self.leakage_report is not None:
+            if not self.leakage_report.passed:
+                return False
+
+        return True
+
+    @property
+    def production_safe(self) -> bool:
+        """
+        Dataset readiness is not the same thing as model approval.
+
+        This property therefore remains False. A clean dataset is only
+        a prerequisite for research.
+        """
+
+        return False
+
+    def summary(self) -> dict:
         return {
             "symbol": self.symbol,
             "timeframe": self.timeframe,
             "rows": self.rows,
-            "features": self.feature_count,
-            "targets": self.target_count,
+            "features": len(
+                self.feature_columns
+            ),
+            "targets": len(
+                self.target_columns
+            ),
             "horizons": list(
                 self.horizons
             ),
-            "start": self.start,
-            "end": self.end,
-            "warnings": len(
+            "passed": self.passed,
+            "production_safe": self.production_safe,
+            "warnings": list(
                 self.warnings
             ),
+            "metadata": dict(
+                self.metadata
+            ),
         }
-
-
-# ----------------------------------------------------------------------
-# Dataset builder
-# ----------------------------------------------------------------------
 
 
 class ResearchDatasetBuilder:
     """
-    Builds a leakage-safe research dataset.
+    Build a leakage-audited research dataset.
 
-    The builder is intentionally independent of model training.
+    The builder is dependency-injectable so unit tests can replace the
+    data, feature, and target construction functions.
     """
 
     def __init__(
         self,
-        config: ResearchPipelineConfig,
-        *,
-        data_builder: Callable[..., Any] | None = None,
-        feature_builder: Callable[
-            [pd.DataFrame],
-            Any,
-        ]
-        | None = None,
-        target_builder: Callable[..., Any] | None = None,
+        data_builder: Callable | None = None,
+        feature_builder: Callable | None = None,
+        target_builder: Callable | None = None,
+        leakage_config: LeakageAuditConfig | None = None,
+        minimum_rows: int = 500,
+        maximum_feature_ratio: float = 0.25,
+        maximum_missing_fraction: float = 0.40,
     ) -> None:
-
-        if not isinstance(
-            config,
-            ResearchPipelineConfig,
-        ):
-            raise TypeError(
-                "config must be a ResearchPipelineConfig."
-            )
-
-        self.config = config
-
         self.data_builder = (
             data_builder
-            or build_historical_dataset
+            if data_builder is not None
+            else self._default_data_builder
         )
 
         self.feature_builder = (
             feature_builder
-            or engineer_features
+            if feature_builder is not None
+            else engineer_features
         )
 
         self.target_builder = (
             target_builder
-            or build_targets
+            if target_builder is not None
+            else build_all_targets
         )
 
-    # ------------------------------------------------------------------
-    # Public build method
-    # ------------------------------------------------------------------
-
-    def build(self) -> ResearchDatasetResult:
-        """
-        Build the complete research dataset.
-        """
-
-        raw_data = self._load_data()
-
-        self._validate_raw_data(
-            raw_data
+        self.leakage_config = (
+            leakage_config
+            if leakage_config is not None
+            else LeakageAuditConfig()
         )
 
-        features = self._build_features(
-            raw_data
-        )
-
-        self._validate_features(
-            features
-        )
-
-        dataset = self._build_targets(
-            features
-        )
-
-        feature_columns = (
-            self._identify_features(
-                dataset
-            )
-        )
-
-        target_columns = (
-            self._identify_targets(
-                dataset
-            )
-        )
-
-        self._validate_feature_target_separation(
-            feature_columns,
-            target_columns,
-        )
-
-        self._validate_feature_names(
-            feature_columns
-        )
-
-        self._validate_feature_values(
-            dataset,
-            feature_columns,
-        )
-
-        dataset = self._sort_and_deduplicate(
-            dataset
-        )
-
-        warnings = self._build_warnings(
-            dataset,
-            feature_columns,
-            target_columns,
-        )
-
-        return ResearchDatasetResult(
-            symbol=self.config.symbol,
-            timeframe=self.config.timeframe,
-            dataframe=dataset,
-            feature_columns=feature_columns,
-            target_columns=target_columns,
-            horizons=self.config.horizons,
-            start=dataset.index.min(),
-            end=dataset.index.max(),
-            rows=len(dataset),
-            warnings=warnings,
-            metadata={
-                "symbol": self.config.symbol,
-                "timeframe": self.config.timeframe,
-                "horizons": list(
-                    self.config.horizons
-                ),
-                "feature_count": len(
-                    feature_columns
-                ),
-                "target_count": len(
-                    target_columns
-                ),
-            },
-        )
-
-    # ------------------------------------------------------------------
-    # Data
-    # ------------------------------------------------------------------
-
-    def _load_data(self) -> pd.DataFrame:
-        """
-        Load historical OHLCV data.
-        """
-
-        try:
-            result = self.data_builder(
-                self.config.symbol,
-                timeframe=self.config.timeframe,
-            )
-        except TypeError:
-            result = self.data_builder(
-                self.config.symbol
-            )
-
-        dataframe = self._extract_dataframe(
-            result
-        )
-
-        if dataframe is None:
+        if minimum_rows < 1:
             raise ValueError(
-                "Data builder did not return a DataFrame."
+                "minimum_rows must be positive."
             )
 
-        return dataframe.copy()
+        if not (
+            0.0
+            < maximum_feature_ratio
+            <= 1.0
+        ):
+            raise ValueError(
+                "maximum_feature_ratio must be in (0, 1]."
+            )
+
+        if not (
+            0.0
+            <= maximum_missing_fraction
+            < 1.0
+        ):
+            raise ValueError(
+                "maximum_missing_fraction must be in [0, 1)."
+            )
+
+        self.minimum_rows = minimum_rows
+        self.maximum_feature_ratio = (
+            maximum_feature_ratio
+        )
+        self.maximum_missing_fraction = (
+            maximum_missing_fraction
+        )
+
+    # ------------------------------------------------------------------
+    # Default builders
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def _extract_dataframe(
-        result: Any,
-    ) -> pd.DataFrame | None:
+    def _default_data_builder(
+        symbol: str,
+        timeframe: str = "1D",
+    ) -> pd.DataFrame:
+        """
+        Default raw-data loader.
 
-        if isinstance(
-            result,
-            pd.DataFrame,
-        ):
+        Imports are intentionally local so that importing this module
+        does not automatically trigger market-data dependencies.
+        """
+
+        from src.data.pipeline import (
+            build_historical_dataset,
+        )
+
+        result = build_historical_dataset(
+            symbol=symbol,
+            timeframe=timeframe,
+        )
+
+        if hasattr(result, "data"):
+            return result.data
+
+        if isinstance(result, pd.DataFrame):
             return result
 
-        for name in (
-            "data",
-            "dataset",
-            "dataframe",
-            "prepared_data",
-            "daily",
-        ):
-            value = getattr(
-                result,
-                name,
-                None,
-            )
-
-            if isinstance(
-                value,
-                pd.DataFrame,
-            ):
-                return value
-
-        return None
-
-    @staticmethod
-    def _validate_raw_data(
-        dataframe: pd.DataFrame,
-    ) -> None:
-
-        if dataframe.empty:
-            raise ValueError(
-                "Historical OHLCV dataset is empty."
-            )
-
-        required = {
-            "Open",
-            "High",
-            "Low",
-            "Close",
-            "Volume",
-        }
-
-        missing = (
-            required
-            - set(
-                dataframe.columns
-            )
+        raise TypeError(
+            "Default data builder did not return a DataFrame."
         )
 
-        if missing:
+    # ------------------------------------------------------------------
+    # Validation helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_basic_dataframe(
+        data: pd.DataFrame,
+    ) -> None:
+        if not isinstance(
+            data,
+            pd.DataFrame,
+        ):
+            raise TypeError(
+                "Research data must be a pandas DataFrame."
+            )
+
+        if data.empty:
             raise ValueError(
-                "Historical dataset is missing required columns: "
-                f"{sorted(missing)}"
+                "Research data is empty."
             )
 
         if not isinstance(
-            dataframe.index,
+            data.index,
             pd.DatetimeIndex,
         ):
             raise TypeError(
-                "Historical dataset must use a DatetimeIndex."
+                "Research data must use a DatetimeIndex."
             )
 
-        if dataframe.index.has_duplicates:
+        if data.index.has_duplicates:
             raise ValueError(
-                "Historical dataset contains duplicate timestamps."
+                "Research data contains duplicate timestamps."
             )
 
-        if not dataframe.index.is_monotonic_increasing:
+        if not data.index.is_monotonic_increasing:
             raise ValueError(
-                "Historical dataset is not chronological."
+                "Research data must be chronologically sorted."
             )
-
-    # ------------------------------------------------------------------
-    # Features
-    # ------------------------------------------------------------------
-
-    def _build_features(
-        self,
-        dataframe: pd.DataFrame,
-    ) -> pd.DataFrame:
-
-        output = self.feature_builder(
-            dataframe.copy()
-        )
-
-        if isinstance(
-            output,
-            pd.DataFrame,
-        ):
-            return output.copy()
-
-        # FeatureSet compatibility.
-        feature_data = getattr(
-            output,
-            "data",
-            None,
-        )
-
-        if isinstance(
-            feature_data,
-            pd.DataFrame,
-        ):
-            return feature_data.copy()
-
-        raise TypeError(
-            "Feature builder must return a DataFrame "
-            "or FeatureSet containing a DataFrame."
-        )
-
-    @staticmethod
-    def _validate_features(
-        dataframe: pd.DataFrame,
-    ) -> None:
-
-        if dataframe.empty:
-            raise ValueError(
-                "Feature dataset is empty."
-            )
-
-        if dataframe.index.has_duplicates:
-            raise ValueError(
-                "Feature dataset contains duplicate timestamps."
-            )
-
-        if not dataframe.index.is_monotonic_increasing:
-            raise ValueError(
-                "Feature dataset is not chronological."
-            )
-
-    # ------------------------------------------------------------------
-    # Targets
-    # ------------------------------------------------------------------
-
-    def _build_targets(
-        self,
-        dataframe: pd.DataFrame,
-    ) -> pd.DataFrame:
-
-        result = dataframe.copy()
-
-        for horizon in self.config.horizons:
-
-            target_spec = TargetSpec(
-                horizon=int(
-                    horizon
-                )
-            )
-
-            target_frame = (
-                self._call_target_builder(
-                    result,
-                    target_spec,
-                )
-            )
-
-            if target_frame.empty:
-                raise ValueError(
-                    f"Target builder returned an empty frame "
-                    f"for horizon {horizon}."
-                )
-
-            target_frame = (
-                target_frame.copy()
-            )
-
-            overlapping = (
-                set(
-                    target_frame.columns
-                )
-                & set(
-                    result.columns
-                )
-            )
-
-            unexpected_overlap = (
-                overlapping
-                - {
-                    "Open",
-                    "High",
-                    "Low",
-                    "Close",
-                    "Volume",
-                }
-            )
-
-            if unexpected_overlap:
-                target_frame = (
-                    target_frame.drop(
-                        columns=list(
-                            unexpected_overlap
-                        )
-                    )
-                )
-
-            result = result.join(
-                target_frame,
-                how="left",
-                rsuffix="_target",
-            )
-
-        return result
-
-    def _call_target_builder(
-        self,
-        dataframe: pd.DataFrame,
-        target_spec: TargetSpec,
-    ) -> pd.DataFrame:
-
-        try:
-            output = self.target_builder(
-                dataframe,
-                target_spec,
-            )
-
-        except TypeError:
-
-            try:
-                output = self.target_builder(
-                    dataframe,
-                    horizon=target_spec.horizon,
-                )
-
-            except TypeError:
-                output = self.target_builder(
-                    dataframe,
-                    target_spec.horizon,
-                )
-
-        if not isinstance(
-            output,
-            pd.DataFrame,
-        ):
-            raise TypeError(
-                "Target builder must return a DataFrame."
-            )
-
-        return output
-
-    # ------------------------------------------------------------------
-    # Feature / target identification
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _identify_features(
-        dataframe: pd.DataFrame,
+        data: pd.DataFrame,
     ) -> list[str]:
+        """
+        Identify candidate model features.
 
-        excluded_prefixes = (
-            "Future_",
-            "Direction_",
-            "Target_",
-        )
+        Target columns and obvious metadata columns are excluded.
+        """
 
-        excluded_names = {
+        excluded = {
             "Symbol",
+            "Target",
             "_source_time",
             "_base_time",
         }
 
-        features = []
+        features: list[str] = []
 
-        for column in dataframe.columns:
+        for column in data.columns:
+            name = str(column)
 
-            name = str(
-                column
-            )
-
-            if name in excluded_names:
+            if name in excluded:
                 continue
 
-            if any(
-                name.startswith(
-                    prefix
-                )
-                for prefix in excluded_prefixes
+            if name.startswith(
+                "Future_"
             ):
                 continue
 
-            features.append(
-                name
-            )
+            if name.startswith(
+                "Direction_"
+            ):
+                continue
+
+            if name.startswith(
+                "Target_"
+            ):
+                continue
+
+            features.append(name)
 
         return features
 
     @staticmethod
     def _identify_targets(
-        dataframe: pd.DataFrame,
+        data: pd.DataFrame,
     ) -> list[str]:
+        """
+        Identify future prediction targets.
+        """
 
-        targets = []
+        targets: list[str] = []
 
-        for column in dataframe.columns:
-
-            name = str(
-                column
-            )
+        for column in data.columns:
+            name = str(column)
 
             if (
-                name.startswith(
-                    "Future_"
-                )
-                or name.startswith(
-                    "Direction_"
-                )
-                or name.startswith(
-                    "Target_"
-                )
+                name.startswith("Future_")
+                or name.startswith("Direction_")
             ):
-                targets.append(
-                    name
-                )
+                targets.append(name)
 
         return targets
 
-    # ------------------------------------------------------------------
-    # Leakage protection
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _validate_feature_target_separation(
-        feature_columns: list[str],
-        target_columns: list[str],
+        features: Sequence[str],
+        targets: Sequence[str],
     ) -> None:
-
-        overlap = (
-            set(
-                feature_columns
-            )
-            & set(
-                target_columns
+        overlap = sorted(
+            set(features).intersection(
+                targets
             )
         )
 
         if overlap:
             raise ValueError(
-                "Feature/target leakage detected. "
-                f"Overlapping columns: {sorted(overlap)}"
+                "Feature/target overlap detected: "
+                f"{overlap}"
             )
 
     @staticmethod
-    def _validate_feature_names(
-        feature_columns: list[str],
+    def _validate_numeric_features(
+        data: pd.DataFrame,
+        features: Sequence[str],
     ) -> None:
-
-        suspicious = []
-
-        for column in feature_columns:
-
-            lower = str(
-                column
-            ).lower()
-
-            suspicious_tokens = (
-                "future",
-                "target",
-                "forward",
-                "next_day",
-                "nextday",
-            )
-
-            if any(
-                token in lower
-                for token in suspicious_tokens
-            ):
-                suspicious.append(
-                    column
-                )
-
-        if suspicious:
-            raise ValueError(
-                "Potential forward-looking feature names detected: "
-                f"{sorted(suspicious)}"
-            )
-
-    @staticmethod
-    def _validate_feature_values(
-        dataframe: pd.DataFrame,
-        feature_columns: list[str],
-    ) -> None:
-
-        if not feature_columns:
-            raise ValueError(
-                "No feature columns were identified."
-            )
-
-        for column in feature_columns:
-
-            series = dataframe[
-                column
-            ]
-
+        for column in features:
             if not pd.api.types.is_numeric_dtype(
-                series
+                data[column]
             ):
                 raise TypeError(
                     f"Feature '{column}' is not numeric."
                 )
 
-            values = series.to_numpy(
-                dtype=float
-            )
-
-            if np.isinf(
-                values
-            ).any():
-                raise ValueError(
-                    f"Feature '{column}' contains infinite values."
-                )
-
-    # ------------------------------------------------------------------
-    # Index handling
-    # ------------------------------------------------------------------
-
     @staticmethod
-    def _sort_and_deduplicate(
-        dataframe: pd.DataFrame,
-    ) -> pd.DataFrame:
-
-        result = dataframe.copy()
-
-        result = result.sort_index()
-
-        result = result[
-            ~result.index.duplicated(
-                keep="last"
-            )
+    def _validate_finite_features(
+        data: pd.DataFrame,
+        features: Sequence[str],
+    ) -> None:
+        values = data.loc[
+            :,
+            list(features),
         ]
+
+        if np.isinf(
+            values.to_numpy(
+                dtype=float,
+                na_value=np.nan,
+            )
+        ).any():
+            raise ValueError(
+                "Feature matrix contains infinite values."
+            )
+
+    # ------------------------------------------------------------------
+    # Target construction
+    # ------------------------------------------------------------------
+
+    def _build_targets(
+        self,
+        data: pd.DataFrame,
+        horizons: Sequence[int],
+    ) -> pd.DataFrame:
+        """
+        Build all requested future targets.
+
+        The target builder is isolated from feature engineering so that
+        future information can never accidentally become an input.
+        """
+
+        target_specs = [
+            TargetSpec(
+                horizon=int(horizon)
+            )
+            for horizon in horizons
+        ]
+
+        try:
+            result = self.target_builder(
+                data,
+                target_specs,
+            )
+        except TypeError:
+            # Compatibility with target builders that accept a horizon
+            # sequence directly.
+            result = self.target_builder(
+                data,
+                horizons,
+            )
+
+        if not isinstance(
+            result,
+            pd.DataFrame,
+        ):
+            raise TypeError(
+                "Target builder must return a DataFrame."
+            )
 
         return result
 
@@ -736,93 +418,363 @@ class ResearchDatasetBuilder:
     # Warnings
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _build_warnings(
-        dataframe: pd.DataFrame,
-        feature_columns: list[str],
-        target_columns: list[str],
+    def _generate_warnings(
+        self,
+        data: pd.DataFrame,
+        features: Sequence[str],
     ) -> list[str]:
-
         warnings: list[str] = []
 
-        if len(
-            dataframe
-        ) < 500:
-
+        if len(data) < self.minimum_rows:
             warnings.append(
-                "Dataset contains fewer than 500 observations; "
-                "model estimates may be unstable."
+                "Dataset contains fewer than "
+                f"{self.minimum_rows} observations. "
+                "Statistical conclusions may be unstable."
             )
 
-        if len(
-            feature_columns
-        ) > max(
-            1,
-            len(
-                dataframe
-            ) // 5,
-        ):
-
-            warnings.append(
-                "Feature count is high relative to sample size; "
-                "feature selection and regularization are important."
+        if len(features) > 0:
+            feature_ratio = (
+                len(features)
+                / max(len(data), 1)
             )
 
-        missing_feature_fraction = float(
-            dataframe[
-                feature_columns
+            if (
+                feature_ratio
+                > self.maximum_feature_ratio
+            ):
+                warnings.append(
+                    "Feature-to-observation ratio is high "
+                    f"({feature_ratio:.3f}). "
+                    "Consider feature selection and regularization."
+                )
+
+        missing_fraction = (
+            data.loc[
+                :,
+                list(features),
             ]
             .isna()
             .mean()
-            .mean()
+            .max()
+            if features
+            else 0.0
         )
 
         if (
-            missing_feature_fraction
-            > 0.20
+            missing_fraction
+            > self.maximum_missing_fraction
         ):
-
             warnings.append(
-                "Feature matrix contains substantial missing data."
-            )
-
-        if not target_columns:
-
-            warnings.append(
-                "No targets are available."
+                "At least one feature has a high missing-value "
+                f"fraction ({missing_fraction:.1%})."
             )
 
         return warnings
 
+    # ------------------------------------------------------------------
+    # Main build method
+    # ------------------------------------------------------------------
 
-# ----------------------------------------------------------------------
-# Convenience function
-# ----------------------------------------------------------------------
+    def build(
+        self,
+        symbol: str,
+        timeframe: str = "1D",
+        horizons: Sequence[int] = (
+            1,
+            3,
+            5,
+            10,
+            20,
+        ),
+        raw_data: pd.DataFrame | None = None,
+    ) -> ResearchDatasetResult:
+        """
+        Build and formally audit a research dataset.
+
+        A failed leakage audit raises ValueError. This prevents
+        contaminated datasets from silently reaching model training.
+        """
+
+        symbol = str(symbol).strip().upper()
+        timeframe = str(
+            timeframe
+        ).strip().upper()
+
+        if not symbol:
+            raise ValueError(
+                "symbol must not be empty."
+            )
+
+        if not timeframe:
+            raise ValueError(
+                "timeframe must not be empty."
+            )
+
+        horizons = tuple(
+            sorted(
+                {
+                    int(horizon)
+                    for horizon in horizons
+                }
+            )
+        )
+
+        if not horizons:
+            raise ValueError(
+                "At least one prediction horizon is required."
+            )
+
+        if any(
+            horizon <= 0
+            for horizon in horizons
+        ):
+            raise ValueError(
+                "Prediction horizons must be positive."
+            )
+
+        # --------------------------------------------------------------
+        # Stage 1: raw data
+        # --------------------------------------------------------------
+
+        data = (
+            raw_data.copy()
+            if raw_data is not None
+            else self.data_builder(
+                symbol=symbol,
+                timeframe=timeframe,
+            )
+        )
+
+        self._validate_basic_dataframe(
+            data
+        )
+
+        quality_report = validate_ohlcv(
+            data
+        )
+
+        assert_quality(
+            quality_report
+        )
+
+        # --------------------------------------------------------------
+        # Stage 2: feature engineering
+        # --------------------------------------------------------------
+
+        feature_result = self.feature_builder(
+            data
+        )
+
+        if isinstance(
+            feature_result,
+            pd.DataFrame,
+        ):
+            featured = feature_result
+        elif hasattr(
+            feature_result,
+            "data",
+        ):
+            featured = feature_result.data
+        else:
+            raise TypeError(
+                "Feature builder must return a DataFrame "
+                "or an object containing .data."
+            )
+
+        self._validate_basic_dataframe(
+            featured
+        )
+
+        # --------------------------------------------------------------
+        # Stage 3: target construction
+        # --------------------------------------------------------------
+
+        targets = self._build_targets(
+            featured,
+            horizons,
+        )
+
+        if not featured.index.equals(
+            targets.index
+        ):
+            targets = targets.reindex(
+                featured.index
+            )
+
+        combined = featured.join(
+            targets,
+            how="left",
+            rsuffix="_target",
+        )
+
+        self._validate_basic_dataframe(
+            combined
+        )
+
+        # --------------------------------------------------------------
+        # Stage 4: feature/target separation
+        # --------------------------------------------------------------
+
+        feature_columns = self._identify_features(
+            combined
+        )
+
+        target_columns = self._identify_targets(
+            combined
+        )
+
+        if not feature_columns:
+            raise ValueError(
+                "No model features were identified."
+            )
+
+        if not target_columns:
+            raise ValueError(
+                "No prediction targets were identified."
+            )
+
+        self._validate_feature_target_separation(
+            feature_columns,
+            target_columns,
+        )
+
+        self._validate_numeric_features(
+            combined,
+            feature_columns,
+        )
+
+        self._validate_finite_features(
+            combined,
+            feature_columns,
+        )
+
+        # --------------------------------------------------------------
+        # Stage 5: FORMAL LEAKAGE AUDIT
+        # --------------------------------------------------------------
+
+        leakage_report = audit_research_dataset(
+            combined,
+            feature_columns,
+            target_columns,
+            config=self.leakage_config,
+        )
+
+        if not leakage_report.passed:
+            raise ValueError(
+                "Research dataset failed the formal leakage audit. "
+                "Model training is blocked."
+            )
+
+        # --------------------------------------------------------------
+        # Stage 6: research warnings
+        # --------------------------------------------------------------
+
+        warnings = self._generate_warnings(
+            combined,
+            feature_columns,
+        )
+
+        metadata = {
+            "builder": (
+                "ResearchDatasetBuilder"
+            ),
+            "leakage_audit_passed": True,
+            "quality_passed": (
+                quality_report.passed
+            ),
+            "feature_count": len(
+                feature_columns
+            ),
+            "target_count": len(
+                target_columns
+            ),
+            "minimum_rows": (
+                self.minimum_rows
+            ),
+            "research_only": True,
+        }
+
+        return ResearchDatasetResult(
+            data=combined,
+            feature_columns=tuple(
+                feature_columns
+            ),
+            target_columns=tuple(
+                target_columns
+            ),
+            symbol=symbol,
+            timeframe=timeframe,
+            horizons=horizons,
+            quality_report=quality_report,
+            leakage_report=leakage_report,
+            warnings=tuple(
+                warnings
+            ),
+            metadata=metadata,
+        )
+
+    # ------------------------------------------------------------------
+    # Convenience aliases
+    # ------------------------------------------------------------------
+
+    def run(
+        self,
+        symbol: str,
+        timeframe: str = "1D",
+        horizons: Sequence[int] = (
+            1,
+            3,
+            5,
+            10,
+            20,
+        ),
+        raw_data: pd.DataFrame | None = None,
+    ) -> ResearchDatasetResult:
+        """
+        Alias for build().
+        """
+
+        return self.build(
+            symbol=symbol,
+            timeframe=timeframe,
+            horizons=horizons,
+            raw_data=raw_data,
+        )
 
 
 def build_research_dataset(
-    config: ResearchPipelineConfig,
-    *,
-    data_builder: Callable[..., Any] | None = None,
-    feature_builder: Callable[
-        [pd.DataFrame],
-        Any,
-    ]
-    | None = None,
-    target_builder: Callable[..., Any] | None = None,
+    symbol: str,
+    timeframe: str = "1D",
+    horizons: Sequence[int] = (
+        1,
+        3,
+        5,
+        10,
+        20,
+    ),
+    raw_data: pd.DataFrame | None = None,
+    data_builder: Callable | None = None,
+    feature_builder: Callable | None = None,
+    target_builder: Callable | None = None,
+    leakage_config: LeakageAuditConfig | None = None,
 ) -> ResearchDatasetResult:
     """
-    Convenience wrapper around ResearchDatasetBuilder.
+    Convenience function for building a research dataset.
     """
 
     builder = ResearchDatasetBuilder(
-        config,
         data_builder=data_builder,
         feature_builder=feature_builder,
         target_builder=target_builder,
+        leakage_config=leakage_config,
     )
 
-    return builder.build()
+    return builder.build(
+        symbol=symbol,
+        timeframe=timeframe,
+        horizons=horizons,
+        raw_data=raw_data,
+    )
 
 
 __all__ = [
