@@ -91,6 +91,12 @@ from .holdout_stage import (
     run_final_holdout_stage,
 )
 
+from .pipeline_holdout import (
+    HoldoutPipelineResult,
+    ProtectedHoldoutPipeline,
+    run_protected_holdout,
+)
+
 __all__ = [
     # ------------------------------------------------------------------
     # Legacy / modular research configuration
@@ -184,9 +190,16 @@ __all__ = [
     "evaluate_holdout_gate",
 
     # ------------------------------------------------------------------
-    # Final holdout evaluation stage
+    # Final holdout evaluation
     # ------------------------------------------------------------------
     "FinalHoldoutStage",
     "HoldoutStageResult",
     "run_final_holdout_stage",
+
+    # ------------------------------------------------------------------
+    # Protected holdout pipeline
+    # ------------------------------------------------------------------
+    "HoldoutPipelineResult",
+    "ProtectedHoldoutPipeline",
+    "run_protected_holdout",
 ]
