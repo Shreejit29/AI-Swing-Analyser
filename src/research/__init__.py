@@ -1,8 +1,7 @@
 """
 AI Swing Analyser — Research package.
 
-Public exports for the research, validation, model-selection,
-model documentation, integration, and approval framework.
+Central exports for the research-first modelling framework.
 """
 
 from .config import (
@@ -31,6 +30,12 @@ from .research_config import (
     default_integrated_research_config,
 )
 
+from .pipeline import (
+    ResearchPipeline,
+    ResearchPipelineResult,
+    ResearchStage,
+)
+
 from .model_selection import (
     ControlledModelSelector,
     ModelCandidateScore,
@@ -55,10 +60,9 @@ from .selection_registry import (
 from .model_card import (
     ModelCard,
     ModelCardBuilder,
-    load_model_card,
     model_card_from_selection,
-    model_card_summary,
     save_model_card,
+    load_model_card,
 )
 
 from .model_card_registry import (
@@ -66,69 +70,123 @@ from .model_card_registry import (
     register_model_card,
 )
 
-from .pipeline import (
-    ResearchPipeline,
-    ResearchPipelineResult,
-    ResearchStage,
+from .selection_stage import (
+    ModelSelectionStage,
+    ModelSelectionStageResult,
+    run_model_selection_stage,
+)
+
+from .holdout_gate import (
+    FinalHoldoutGate,
+    HoldoutGateInput,
+    HoldoutGateResult,
+    HoldoutGateStatus,
+    create_holdout_gate,
+    evaluate_holdout_gate,
+)
+
+from .holdout_stage import (
+    FinalHoldoutStage,
+    HoldoutStageResult,
+    run_final_holdout_stage,
 )
 
 __all__ = [
-    # Existing research configuration
-    "ResearchApprovalConfig",
-    "ResearchBacktestConfig",
-    "ResearchCalibrationConfig",
+    # ------------------------------------------------------------------
+    # Legacy / modular research configuration
+    # ------------------------------------------------------------------
+    "ResearchValidationConfig",
     "ResearchFeatureConfig",
     "ResearchHyperparameterConfig",
-    "ResearchPipelineConfig",
+    "ResearchCalibrationConfig",
     "ResearchRangeConfig",
+    "ResearchBacktestConfig",
     "ResearchRobustnessConfig",
-    "ResearchValidationConfig",
+    "ResearchApprovalConfig",
+    "ResearchPipelineConfig",
 
-    # Integrated configuration
-    "IntegratedApprovalConfig",
-    "IntegratedBacktestConfig",
+    # ------------------------------------------------------------------
+    # Integrated research configuration
+    # ------------------------------------------------------------------
+    "IntegratedValidationConfig",
     "IntegratedCalibrationConfig",
-    "IntegratedHoldoutConfig",
     "IntegratedRangeConfig",
     "IntegratedRegimeConfig",
-    "IntegratedResearchConfig",
+    "IntegratedBacktestConfig",
     "IntegratedRobustnessConfig",
+    "IntegratedHoldoutConfig",
+    "IntegratedApprovalConfig",
     "IntegratedTradingConfig",
-    "IntegratedValidationConfig",
+    "IntegratedResearchConfig",
     "default_integrated_research_config",
 
+    # ------------------------------------------------------------------
+    # Main research pipeline
+    # ------------------------------------------------------------------
+    "ResearchPipeline",
+    "ResearchPipelineResult",
+    "ResearchStage",
+
+    # ------------------------------------------------------------------
     # Controlled model selection
-    "ControlledModelSelector",
+    # ------------------------------------------------------------------
     "ModelCandidateScore",
     "ModelSelectionConfig",
     "ModelSelectionResult",
+    "ControlledModelSelector",
     "select_best_model",
 
+    # ------------------------------------------------------------------
     # Selection pipeline
+    # ------------------------------------------------------------------
     "SelectionCandidate",
     "SelectionPipeline",
     "SelectionPipelineResult",
     "run_model_selection",
 
+    # ------------------------------------------------------------------
     # Selection registry
+    # ------------------------------------------------------------------
     "SelectionRecord",
     "SelectionRegistry",
     "register_selection",
 
+    # ------------------------------------------------------------------
     # Model cards
+    # ------------------------------------------------------------------
     "ModelCard",
     "ModelCardBuilder",
-    "load_model_card",
     "model_card_from_selection",
-    "model_card_summary",
     "save_model_card",
+    "load_model_card",
 
-    # Model-card registry
+    # ------------------------------------------------------------------
+    # Model card registry
+    # ------------------------------------------------------------------
     "ModelCardRegistry",
     "register_model_card",
 
-    # Main research pipeline
-    "ResearchPipeline",
-    "ResearchPipelineResult",
-    "ResearchStage",
+    # ------------------------------------------------------------------
+    # Integrated model selection stage
+    # ------------------------------------------------------------------
+    "ModelSelectionStage",
+    "ModelSelectionStageResult",
+    "run_model_selection_stage",
+
+    # ------------------------------------------------------------------
+    # Final holdout protection
+    # ------------------------------------------------------------------
+    "FinalHoldoutGate",
+    "HoldoutGateInput",
+    "HoldoutGateResult",
+    "HoldoutGateStatus",
+    "create_holdout_gate",
+    "evaluate_holdout_gate",
+
+    # ------------------------------------------------------------------
+    # Final holdout evaluation stage
+    # ------------------------------------------------------------------
+    "FinalHoldoutStage",
+    "HoldoutStageResult",
+    "run_final_holdout_stage",
 ]
