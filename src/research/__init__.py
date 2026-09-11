@@ -1,12 +1,13 @@
 """
 AI Swing Analyser — Research Package.
 
-Public exports for the research and model-development layers.
-"""
+Public API for the research, validation, model-selection,
+market-context, feature-integration, and production-boundary layers.
 
-# ---------------------------------------------------------------------
-# Core research configuration
-# ---------------------------------------------------------------------
+Important:
+This package exposes research functionality but does not itself
+grant production approval.
+"""
 
 from .config import (
     ResearchValidationConfig,
@@ -34,23 +35,15 @@ from .research_config import (
     default_integrated_research_config,
 )
 
-# ---------------------------------------------------------------------
-# Main research pipeline
-# ---------------------------------------------------------------------
-
 from .pipeline import (
     ResearchPipeline,
     ResearchPipelineResult,
     ResearchStage,
 )
 
-# ---------------------------------------------------------------------
-# Dataset and leakage control
-# ---------------------------------------------------------------------
-
 from .dataset_builder import (
-    ResearchDatasetResult,
     ResearchDatasetBuilder,
+    ResearchDatasetResult,
     build_research_dataset,
 )
 
@@ -64,10 +57,6 @@ from .leakage_audit import (
     compare_future_mutation,
 )
 
-# ---------------------------------------------------------------------
-# Temporal research
-# ---------------------------------------------------------------------
-
 from .temporal_split import (
     TemporalSplit,
     HoldoutSplit,
@@ -75,17 +64,6 @@ from .temporal_split import (
     create_holdout_split,
     create_walk_forward_splits,
 )
-
-from .walk_forward_research import (
-    WalkForwardFoldResult,
-    WalkForwardResearchResult,
-    WalkForwardResearchEngine,
-    run_walk_forward_research,
-)
-
-# ---------------------------------------------------------------------
-# Model development and selection
-# ---------------------------------------------------------------------
 
 from .model_development import (
     DevelopmentPartitions,
@@ -97,6 +75,53 @@ from .experiment_runner import (
     ExperimentCandidate,
     ExperimentRunResult,
     ResearchExperimentRunner,
+)
+
+from .walk_forward_research import (
+    WalkForwardFoldResult,
+    WalkForwardResearchResult,
+    WalkForwardResearchEngine,
+    run_walk_forward_research,
+)
+
+from .holdout_evaluation import (
+    HoldoutEvaluationResult,
+    FinalHoldoutEvaluator,
+    evaluate_final_holdout,
+)
+
+from .calibration_research import (
+    CalibrationResearchResult,
+    CalibrationResearchEngine,
+    calibrate_research_probabilities,
+)
+
+from .range_research import (
+    RangeResearchResult,
+    RangeResearchEngine,
+    run_range_research,
+)
+
+from .regime_research import (
+    RegimeResearchResult,
+    RegimeResearchEngine,
+    run_regime_research,
+)
+
+from .backtest_research import (
+    BacktestResearchResult,
+    BacktestResearchEngine,
+    calculate_return_distribution,
+    stress_trade_returns,
+)
+
+from .robustness_research import (
+    MonteCarloResult,
+    StressResult,
+    TradeRemovalResult,
+    RobustnessResearchResult,
+    RobustnessResearchEngine,
+    run_robustness_research,
 )
 
 from .model_selection import (
@@ -126,10 +151,6 @@ from .selection_stage import (
     run_model_selection_stage,
 )
 
-# ---------------------------------------------------------------------
-# Model documentation
-# ---------------------------------------------------------------------
-
 from .model_card import (
     ModelCard,
     ModelCardBuilder,
@@ -143,59 +164,57 @@ from .model_card_registry import (
     register_model_card,
 )
 
-# ---------------------------------------------------------------------
-# Calibration
-# ---------------------------------------------------------------------
-
-from .calibration_research import (
-    CalibrationResearchResult,
-    CalibrationResearchEngine,
-    calibrate_research_probabilities,
+from .holdout_gate import (
+    HoldoutGateStatus,
+    HoldoutGateInput,
+    HoldoutGateResult,
+    FinalHoldoutGate,
+    create_holdout_gate,
+    evaluate_holdout_gate,
 )
 
-# ---------------------------------------------------------------------
-# Range research
-# ---------------------------------------------------------------------
-
-from .range_research import (
-    RangeResearchResult,
-    RangeResearchEngine,
-    run_range_research,
+from .holdout_stage import (
+    HoldoutStageResult,
+    FinalHoldoutStage,
+    run_final_holdout_stage,
 )
 
-# ---------------------------------------------------------------------
-# Regime research
-# ---------------------------------------------------------------------
-
-from .regime_research import (
-    RegimeResearchResult,
-    RegimeResearchEngine,
-    run_regime_research,
+from .pipeline_holdout import (
+    HoldoutPipelineResult,
+    ProtectedHoldoutPipeline,
+    run_protected_holdout,
 )
 
-# ---------------------------------------------------------------------
-# Backtesting and robustness
-# ---------------------------------------------------------------------
-
-from .backtest_research import (
-    BacktestResearchResult,
-    BacktestResearchEngine,
-    calculate_return_distribution,
-    stress_trade_returns,
+from .final_holdout_evidence import (
+    FINAL_HOLDOUT_EVIDENCE_NAME,
+    adapt_final_holdout_result,
+    attach_final_holdout_evidence,
+    final_holdout_evidence_summary,
 )
 
-from .robustness_research import (
-    MonteCarloResult,
-    StressResult,
-    TradeRemovalResult,
-    RobustnessResearchResult,
-    RobustnessResearchEngine,
-    run_robustness_research,
+from .evidence_collector import (
+    WALK_FORWARD_STAGE,
+    FINAL_HOLDOUT_STAGE,
+    CALIBRATION_STAGE,
+    RANGE_STAGE,
+    REGIME_STAGE,
+    BACKTEST_STAGE,
+    ROBUSTNESS_STAGE,
+    LEAKAGE_STAGE,
+    REQUIRED_EVIDENCE_STAGES,
+    EvidenceCollectionResult,
+    ResearchEvidenceCollector,
+    collect_research_evidence,
+    collect_final_holdout_evidence,
+    attach_final_holdout_to_evidence,
+    build_final_holdout_evidence,
+    final_holdout_passed,
+    final_holdout_evaluated,
+    final_holdout_status,
+    final_holdout_summary,
+    validate_final_holdout_identity,
+    collect_holdout_evidence_map,
 )
-
-# ---------------------------------------------------------------------
-# Research evidence and approval
-# ---------------------------------------------------------------------
 
 from .integration import (
     EvidenceStatus,
@@ -225,41 +244,6 @@ from .approval_bridge import (
     assert_research_approved,
 )
 
-# ---------------------------------------------------------------------
-# Final holdout protection
-# ---------------------------------------------------------------------
-
-from .holdout_gate import (
-    HoldoutGateStatus,
-    HoldoutGateInput,
-    HoldoutGateResult,
-    FinalHoldoutGate,
-    create_holdout_gate,
-    evaluate_holdout_gate,
-)
-
-from .holdout_stage import (
-    HoldoutStageResult,
-    FinalHoldoutStage,
-    run_final_holdout_stage,
-)
-
-from .pipeline_holdout import (
-    HoldoutPipelineResult,
-    ProtectedHoldoutPipeline,
-    run_protected_holdout,
-)
-
-from .final_holdout_evidence import (
-    FINAL_HOLDOUT_EVIDENCE_NAME,
-    adapt_final_holdout_result,
-    attach_final_holdout_evidence,
-)
-
-# ---------------------------------------------------------------------
-# Integrated pipeline
-# ---------------------------------------------------------------------
-
 from .pipeline_integration import (
     IntegrationStatus,
     IntegrationStage,
@@ -269,45 +253,19 @@ from .pipeline_integration import (
     integrate_final_holdout,
 )
 
-# ---------------------------------------------------------------------
-# Evidence collection
-# ---------------------------------------------------------------------
-
-from .evidence_collector import (
-    collect_final_holdout_evidence,
-    attach_final_holdout_to_evidence,
-    build_final_holdout_evidence,
-    final_holdout_passed,
-    final_holdout_evaluated,
-    final_holdout_status,
-    final_holdout_summary,
-    validate_final_holdout_identity,
-    collect_holdout_evidence_map,
-)
-
-# ---------------------------------------------------------------------
-# Production prediction
-# ---------------------------------------------------------------------
-
 from .production_prediction import (
     ProductionPredictionStatus,
     ProductionPredictionConfig,
     ProductionPrediction,
     ProductionPredictionGateway,
-    production_prediction_summary,
 )
 
 from .multi_horizon_prediction import (
+    DEFAULT_PRODUCTION_HORIZONS,
     MultiHorizonConfig,
     MultiHorizonPrediction,
     MultiHorizonPredictionEngine,
-    build_multi_horizon_engine,
-    multi_horizon_prediction_summary,
 )
-
-# ---------------------------------------------------------------------
-# Indian market context
-# ---------------------------------------------------------------------
 
 from .market_context import (
     MarketContextConfig,
@@ -334,10 +292,6 @@ from .market_integration import (
     market_integration_summary,
 )
 
-# ---------------------------------------------------------------------
-# Unified feature integration
-# ---------------------------------------------------------------------
-
 from .feature_integration import (
     UnifiedFeatureConfig,
     UnifiedFeatureResult,
@@ -349,7 +303,7 @@ from .feature_integration import (
 
 
 __all__ = [
-    # Core configuration
+    # Legacy research configuration
     "ResearchValidationConfig",
     "ResearchFeatureConfig",
     "ResearchHyperparameterConfig",
@@ -373,14 +327,14 @@ __all__ = [
     "IntegratedResearchConfig",
     "default_integrated_research_config",
 
-    # Pipeline
+    # Core pipeline
     "ResearchPipeline",
     "ResearchPipelineResult",
     "ResearchStage",
 
-    # Dataset / leakage
-    "ResearchDatasetResult",
+    # Dataset and leakage
     "ResearchDatasetBuilder",
+    "ResearchDatasetResult",
     "build_research_dataset",
     "LeakageFinding",
     "LeakageAuditReport",
@@ -396,10 +350,6 @@ __all__ = [
     "TemporalSplitter",
     "create_holdout_split",
     "create_walk_forward_splits",
-    "WalkForwardFoldResult",
-    "WalkForwardResearchResult",
-    "WalkForwardResearchEngine",
-    "run_walk_forward_research",
 
     # Model development
     "DevelopmentPartitions",
@@ -408,6 +358,36 @@ __all__ = [
     "ExperimentCandidate",
     "ExperimentRunResult",
     "ResearchExperimentRunner",
+
+    # Walk-forward and evaluation
+    "WalkForwardFoldResult",
+    "WalkForwardResearchResult",
+    "WalkForwardResearchEngine",
+    "run_walk_forward_research",
+    "HoldoutEvaluationResult",
+    "FinalHoldoutEvaluator",
+    "evaluate_final_holdout",
+
+    # Research stages
+    "CalibrationResearchResult",
+    "CalibrationResearchEngine",
+    "calibrate_research_probabilities",
+    "RangeResearchResult",
+    "RangeResearchEngine",
+    "run_range_research",
+    "RegimeResearchResult",
+    "RegimeResearchEngine",
+    "run_regime_research",
+    "BacktestResearchResult",
+    "BacktestResearchEngine",
+    "calculate_return_distribution",
+    "stress_trade_returns",
+    "MonteCarloResult",
+    "StressResult",
+    "TradeRemovalResult",
+    "RobustnessResearchResult",
+    "RobustnessResearchEngine",
+    "run_robustness_research",
 
     # Model selection
     "ModelCandidateScore",
@@ -435,30 +415,50 @@ __all__ = [
     "ModelCardRegistry",
     "register_model_card",
 
-    # Research stages
-    "CalibrationResearchResult",
-    "CalibrationResearchEngine",
-    "calibrate_research_probabilities",
-    "RangeResearchResult",
-    "RangeResearchEngine",
-    "run_range_research",
-    "RegimeResearchResult",
-    "RegimeResearchEngine",
-    "run_regime_research",
+    # Final holdout protection
+    "HoldoutGateStatus",
+    "HoldoutGateInput",
+    "HoldoutGateResult",
+    "FinalHoldoutGate",
+    "create_holdout_gate",
+    "evaluate_holdout_gate",
+    "HoldoutStageResult",
+    "FinalHoldoutStage",
+    "run_final_holdout_stage",
+    "HoldoutPipelineResult",
+    "ProtectedHoldoutPipeline",
+    "run_protected_holdout",
 
-    # Backtesting / robustness
-    "BacktestResearchResult",
-    "BacktestResearchEngine",
-    "calculate_return_distribution",
-    "stress_trade_returns",
-    "MonteCarloResult",
-    "StressResult",
-    "TradeRemovalResult",
-    "RobustnessResearchResult",
-    "RobustnessResearchEngine",
-    "run_robustness_research",
+    # Final holdout evidence
+    "FINAL_HOLDOUT_EVIDENCE_NAME",
+    "adapt_final_holdout_result",
+    "attach_final_holdout_evidence",
+    "final_holdout_evidence_summary",
 
-    # Evidence
+    # Evidence collection
+    "WALK_FORWARD_STAGE",
+    "FINAL_HOLDOUT_STAGE",
+    "CALIBRATION_STAGE",
+    "RANGE_STAGE",
+    "REGIME_STAGE",
+    "BACKTEST_STAGE",
+    "ROBUSTNESS_STAGE",
+    "LEAKAGE_STAGE",
+    "REQUIRED_EVIDENCE_STAGES",
+    "EvidenceCollectionResult",
+    "ResearchEvidenceCollector",
+    "collect_research_evidence",
+    "collect_final_holdout_evidence",
+    "attach_final_holdout_to_evidence",
+    "build_final_holdout_evidence",
+    "final_holdout_passed",
+    "final_holdout_evaluated",
+    "final_holdout_status",
+    "final_holdout_summary",
+    "validate_final_holdout_identity",
+    "collect_holdout_evidence_map",
+
+    # Evidence framework
     "EvidenceStatus",
     "EvidenceItem",
     "ResearchEvidence",
@@ -477,28 +477,11 @@ __all__ = [
     "adapt_leakage_result",
     "adapt_stage_result",
 
-    # Approval
+    # Approval boundary
     "ApprovalBridgeResult",
     "ResearchApprovalBridge",
     "evaluate_research_approval",
     "assert_research_approved",
-
-    # Holdout
-    "HoldoutGateStatus",
-    "HoldoutGateInput",
-    "HoldoutGateResult",
-    "FinalHoldoutGate",
-    "create_holdout_gate",
-    "evaluate_holdout_gate",
-    "HoldoutStageResult",
-    "FinalHoldoutStage",
-    "run_final_holdout_stage",
-    "HoldoutPipelineResult",
-    "ProtectedHoldoutPipeline",
-    "run_protected_holdout",
-    "FINAL_HOLDOUT_EVIDENCE_NAME",
-    "adapt_final_holdout_result",
-    "attach_final_holdout_evidence",
 
     # Integrated pipeline
     "IntegrationStatus",
@@ -508,30 +491,17 @@ __all__ = [
     "create_research_integrator",
     "integrate_final_holdout",
 
-    # Evidence collector
-    "collect_final_holdout_evidence",
-    "attach_final_holdout_to_evidence",
-    "build_final_holdout_evidence",
-    "final_holdout_passed",
-    "final_holdout_evaluated",
-    "final_holdout_status",
-    "final_holdout_summary",
-    "validate_final_holdout_identity",
-    "collect_holdout_evidence_map",
-
     # Production prediction
     "ProductionPredictionStatus",
     "ProductionPredictionConfig",
     "ProductionPrediction",
     "ProductionPredictionGateway",
-    "production_prediction_summary",
+    "DEFAULT_PRODUCTION_HORIZONS",
     "MultiHorizonConfig",
     "MultiHorizonPrediction",
     "MultiHorizonPredictionEngine",
-    "build_multi_horizon_engine",
-    "multi_horizon_prediction_summary",
 
-    # Market context
+    # Indian market context
     "MarketContextConfig",
     "MarketContextResult",
     "build_benchmark_features",
