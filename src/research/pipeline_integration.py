@@ -1,236 +1,63 @@
 """
-AI Swing Analyser — Research Pipeline Integration.
+AI Swing Analyser — Master Research Pipeline Integration.
 
-Connects the independent research stages into a single auditable
-workflow.
+Integrates all major research stages into a single fail-closed
+evidence and production-readiness boundary.
 
-The integration layer is intentionally conservative:
+Research flow:
 
-    DATA
+    Data
       ↓
-    FEATURES
+    Features
       ↓
-    TARGETS
+    Targets
       ↓
-    MODEL DEVELOPMENT
+    Model Development
       ↓
-    WALK-FORWARD VALIDATION
+    Walk-Forward Validation
       ↓
-    CALIBRATION
+    Calibration
       ↓
-    RANGE VALIDATION
+    Range Validation
       ↓
-    REGIME VALIDATION
+    Regime Validation
       ↓
-    BACKTEST
+    Backtest
       ↓
-    ROBUSTNESS
+    Robustness
       ↓
-    FINAL HOLDOUT
+    Final Holdout
       ↓
-    APPROVAL
+    Leakage Audit
+      ↓
+    Evidence
+      ↓
+    Production Approval
 
-This module coordinates stages and records evidence.
-
-It does not silently bypass failed stages.
-It does not turn research metrics into a live signal.
+This module orchestrates evidence only.
+It does not train models or perform research calculations itself.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Mapping
 
-from src.research.integration import (
+from .evidence_collector import (
+    collect_final_holdout_evidence,
+)
+from .integration import (
+    EvidenceItem,
     EvidenceStatus,
     ResearchEvidence,
-    ResearchEvidenceBuilder,
+)
+from .pipeline_holdout import (
+    HoldoutPipelineResult,
 )
 
 
-# ---------------------------------------------------------------------
-# Pipeline status
-# ---------------------------------------------------------------------
-
-
-class IntegrationStatus(str, Enum):
-    """
-    Overall state of the integrated research workflow.
-    """
-
-    CREATED = "CREATED"
-    RUNNING = "RUNNING"
-    COMPLETE = "COMPLETE"
-    BLOCKED = "BLOCKED"
-    FAILED = "FAILED"
-
-
-# ---------------------------------------------------------------------
-# Stage record
-# ---------------------------------------------------------------------
-
-
-@dataclass
-class IntegrationStage:
-    """
-    Records the outcome of one integrated research stage.
-    """
-
-    name: str
-
-    status: EvidenceStatus = (
-        EvidenceStatus.NOT_EVALUATED
-    )
-
-    started: bool = False
-
-    completed: bool = False
-
-    score: float | None = None
-
-    metrics: dict[str, Any] = field(
-        default_factory=dict
-    )
-
-    details: str = ""
-
-    error: str | None = None
-
-
-# ---------------------------------------------------------------------
-# Pipeline result
-# ---------------------------------------------------------------------
-
-
-@dataclass
-class IntegratedResearchResult:
-    """
-    Complete state of the integrated research workflow.
-    """
-
-    model_id: str | None = None
-
-    symbol: str | None = None
-
-    timeframe: str | None = None
-
-    horizon: int | None = None
-
-    status: IntegrationStatus = (
-        IntegrationStatus.CREATED
-    )
-
-    stages: list[IntegrationStage] = field(
-        default_factory=list
-    )
-
-    evidence: ResearchEvidence | None = None
-
-    production_eligible: bool = False
-
-    errors: list[str] = field(
-        default_factory=list
-    )
-
-    warnings: list[str] = field(
-        default_factory=list
-    )
-
-    metadata: dict[str, Any] = field(
-        default_factory=dict
-    )
-
-    # -----------------------------------------------------------------
-    # Stage helpers
-    # -----------------------------------------------------------------
-
-    def get_stage(
-        self,
-        name: str,
-    ) -> IntegrationStage | None:
-
-        for stage in self.stages:
-            if stage.name == name:
-                return stage
-
-        return None
-
-    def completed_stages(
-        self,
-    ) -> list[IntegrationStage]:
-
-        return [
-            stage
-            for stage in self.stages
-            if stage.completed
-        ]
-
-    def failed_stages(
-        self,
-    ) -> list[IntegrationStage]:
-
-        return [
-            stage
-            for stage in self.stages
-            if stage.status
-            == EvidenceStatus.FAIL
-        ]
-
-    def pending_stages(
-        self,
-    ) -> list[IntegrationStage]:
-
-        return [
-            stage
-            for stage in self.stages
-            if not stage.completed
-        ]
-
-    # -----------------------------------------------------------------
-    # Summary
-    # -----------------------------------------------------------------
-
-    def summary(
-        self,
-    ) -> dict[str, Any]:
-
-        return {
-            "model_id": self.model_id,
-            "symbol": self.symbol,
-            "timeframe": self.timeframe,
-            "horizon": self.horizon,
-            "status": self.status.value,
-            "production_eligible": (
-                self.production_eligible
-            ),
-            "completed_stages": [
-                stage.name
-                for stage in self.completed_stages()
-            ],
-            "failed_stages": [
-                stage.name
-                for stage in self.failed_stages()
-            ],
-            "pending_stages": [
-                stage.name
-                for stage in self.pending_stages()
-            ],
-            "errors": list(
-                self.errors
-            ),
-            "warnings": list(
-                self.warnings
-            ),
-            "metadata": dict(
-                self.metadata
-            ),
-        }
-
-
-# ---------------------------------------------------------------------
-# Default stage definitions
-# ---------------------------------------------------------------------
+FINAL_HOLDOUT_STAGE = "final_holdout"
 
 
 DEFAULT_INTEGRATION_STAGES = (
@@ -249,33 +76,174 @@ DEFAULT_INTEGRATION_STAGES = (
 )
 
 
-# ---------------------------------------------------------------------
-# Pipeline
-# ---------------------------------------------------------------------
+@dataclass
+class IntegrationStage:
+    """Lifecycle information for one research stage."""
+
+    name: str
+    status: str = "NOT_STARTED"
+
+    started_at: str | None = None
+    completed_at: str | None = None
+
+    score: float | None = None
+
+    metrics: dict[str, Any] = field(
+        default_factory=dict
+    )
+
+    details: str = ""
+    error: str | None = None
+
+    def start(self) -> None:
+        self.status = "RUNNING"
+        self.started_at = (
+            datetime.now(
+                timezone.utc
+            ).isoformat()
+        )
+
+    def complete(
+        self,
+        *,
+        score: float | None = None,
+        metrics: Mapping[str, Any] | None = None,
+        details: str = "",
+    ) -> None:
+        self.status = "COMPLETE"
+        self.completed_at = (
+            datetime.now(
+                timezone.utc
+            ).isoformat()
+        )
+
+        self.score = score
+
+        if metrics:
+            self.metrics.update(
+                dict(metrics)
+            )
+
+        self.details = details
+
+    def fail(
+        self,
+        error: str,
+    ) -> None:
+        self.status = "FAILED"
+        self.completed_at = (
+            datetime.now(
+                timezone.utc
+            ).isoformat()
+        )
+        self.error = str(error)
+
+
+@dataclass
+class IntegratedResearchResult:
+    """Complete integrated research result."""
+
+    model_id: str
+
+    status: str = "CREATED"
+
+    stages: dict[
+        str,
+        IntegrationStage,
+    ] = field(
+        default_factory=dict
+    )
+
+    evidence: ResearchEvidence | None = None
+
+    production_eligible: bool = False
+
+    errors: list[str] = field(
+        default_factory=list
+    )
+
+    warnings: list[str] = field(
+        default_factory=list
+    )
+
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
+
+    def failed_stages(
+        self,
+    ) -> list[IntegrationStage]:
+        return [
+            stage
+            for stage in self.stages.values()
+            if stage.status == "FAILED"
+        ]
+
+    def incomplete_stages(
+        self,
+    ) -> list[IntegrationStage]:
+        return [
+            stage
+            for stage in self.stages.values()
+            if stage.status
+            not in {
+                "COMPLETE",
+            }
+        ]
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "model_id": self.model_id,
+            "status": self.status,
+            "stage_count": len(
+                self.stages
+            ),
+            "completed_stages": sum(
+                stage.status == "COMPLETE"
+                for stage in self.stages.values()
+            ),
+            "failed_stages": len(
+                self.failed_stages()
+            ),
+            "incomplete_stages": len(
+                self.incomplete_stages()
+            ),
+            "production_eligible": (
+                self.production_eligible
+            ),
+            "error_count": len(
+                self.errors
+            ),
+            "warning_count": len(
+                self.warnings
+            ),
+        }
 
 
 class ResearchPipelineIntegrator:
     """
-    Coordinates evidence from the independent research stages.
+    Master evidence integration boundary.
 
-    The integrator deliberately separates:
-
-        stage execution
-        evidence recording
-        production eligibility
-
-    This prevents a successful early stage from accidentally
-    being interpreted as a production-ready model.
+    The integrator is deliberately fail-closed.
     """
 
     def __init__(
         self,
-        model_id: str | None = None,
-        symbol: str | None = None,
-        timeframe: str | None = None,
-        horizon: int | None = None,
+        model_id: str,
         stage_names: tuple[str, ...] | None = None,
     ) -> None:
+        if not isinstance(
+            model_id,
+            str,
+        ):
+            raise TypeError(
+                "model_id must be a string."
+            )
+
+        if not model_id.strip():
+            raise ValueError(
+                "model_id cannot be empty."
+            )
 
         names = (
             stage_names
@@ -288,439 +256,401 @@ class ResearchPipelineIntegrator:
                 "At least one integration stage is required."
             )
 
-        if len(set(names)) != len(names):
+        if len(names) != len(set(names)):
             raise ValueError(
                 "Integration stage names must be unique."
             )
 
-        self.result = (
-            IntegratedResearchResult(
-                model_id=model_id,
-                symbol=symbol,
-                timeframe=timeframe,
-                horizon=horizon,
-                stages=[
-                    IntegrationStage(
-                        name=name
-                    )
-                    for name in names
-                ],
-                metadata={
-                    "research_only": True,
-                    "model_fitted": False,
-                    "final_holdout_used": False,
-                    "production_signal_generated": False,
-                },
-            )
+        self.result = IntegratedResearchResult(
+            model_id=model_id,
+            stages={
+                name: IntegrationStage(
+                    name=name
+                )
+                for name in names
+            },
+            metadata={
+                "research_only": True,
+                "production_approved": False,
+            },
         )
 
-    # -----------------------------------------------------------------
-    # Lifecycle
-    # -----------------------------------------------------------------
+    @property
+    def model_id(self) -> str:
+        return self.result.model_id
 
-    def start(self) -> None:
+    def start(self) -> IntegratedResearchResult:
+        self.result.status = "RUNNING"
 
-        if (
-            self.result.status
-            not in (
-                IntegrationStatus.CREATED,
-                IntegrationStatus.RUNNING,
-            )
-        ):
-            raise RuntimeError(
-                "Pipeline cannot be started from "
-                f"status {self.result.status.value}."
-            )
+        self.result.metadata[
+            "started_at"
+        ] = datetime.now(
+            timezone.utc
+        ).isoformat()
 
-        self.result.status = (
-            IntegrationStatus.RUNNING
-        )
-
-    def complete(self) -> None:
-
-        if self.result.status not in (
-            IntegrationStatus.RUNNING,
-            IntegrationStatus.COMPLETE,
-        ):
-            raise RuntimeError(
-                "Pipeline must be running before "
-                "it can be completed."
-            )
-
-        if self.result.errors:
-            self.result.status = (
-                IntegrationStatus.FAILED
-            )
-            self.result.production_eligible = False
-            return
-
-        failed = (
-            self.result.failed_stages()
-        )
-
-        if failed:
-            self.result.status = (
-                IntegrationStatus.BLOCKED
-            )
-            self.result.production_eligible = False
-            return
-
-        self.result.status = (
-            IntegrationStatus.COMPLETE
-        )
-
-        self._refresh_production_eligibility()
-
-    # -----------------------------------------------------------------
-    # Stage state
-    # -----------------------------------------------------------------
+        return self.result
 
     def start_stage(
         self,
-        name: str,
+        stage_name: str,
     ) -> IntegrationStage:
-
-        self.start()
-
-        stage = self._require_stage(
-            name
+        stage = self._get_stage(
+            stage_name
         )
 
-        if stage.completed:
-            raise RuntimeError(
-                f"Stage '{name}' has already completed."
-            )
-
-        stage.started = True
+        stage.start()
 
         return stage
 
     def complete_stage(
         self,
-        name: str,
-        status: EvidenceStatus = (
-            EvidenceStatus.PASS
-        ),
+        stage_name: str,
+        *,
         score: float | None = None,
-        metrics: dict[str, Any] | None = None,
+        metrics: Mapping[str, Any] | None = None,
         details: str = "",
     ) -> IntegrationStage:
-
-        stage = self._require_stage(
-            name
+        stage = self._get_stage(
+            stage_name
         )
 
-        if not stage.started:
-            raise RuntimeError(
-                f"Stage '{name}' must be started first."
-            )
-
-        if status == (
-            EvidenceStatus.NOT_EVALUATED
-        ):
-            raise ValueError(
-                "A completed stage cannot have "
-                "NOT_EVALUATED status."
-            )
-
-        stage.status = status
-        stage.completed = True
-        stage.score = score
-        stage.metrics = (
-            dict(metrics)
-            if metrics is not None
-            else {}
+        stage.complete(
+            score=score,
+            metrics=metrics,
+            details=details,
         )
-        stage.details = details
-
-        if status == EvidenceStatus.FAIL:
-            self.result.warnings.append(
-                f"Stage failed: {name}"
-            )
-
-        self._refresh_production_eligibility()
 
         return stage
 
     def fail_stage(
         self,
-        name: str,
+        stage_name: str,
         error: str,
     ) -> IntegrationStage:
-
-        stage = self._require_stage(
-            name
+        stage = self._get_stage(
+            stage_name
         )
 
-        stage.started = True
-        stage.completed = True
-        stage.status = (
-            EvidenceStatus.FAIL
+        stage.fail(
+            error
         )
-        stage.error = str(error)
 
         self.result.errors.append(
-            f"{name}: {error}"
+            f"{stage_name}: {error}"
         )
 
-        self.result.production_eligible = False
+        self.result.status = "FAILED"
 
         return stage
-
-    # -----------------------------------------------------------------
-    # Evidence integration
-    # -----------------------------------------------------------------
 
     def attach_evidence(
         self,
         evidence: ResearchEvidence,
-    ) -> None:
-
+    ) -> IntegratedResearchResult:
         if not isinstance(
             evidence,
             ResearchEvidence,
         ):
             raise TypeError(
-                "evidence must be a ResearchEvidence instance."
-            )
-
-        if (
-            self.result.model_id is not None
-            and evidence.model_id is not None
-            and self.result.model_id
-            != evidence.model_id
-        ):
-            raise ValueError(
-                "Evidence model_id does not match "
-                "the integration pipeline."
-            )
-
-        if (
-            self.result.symbol is not None
-            and evidence.symbol is not None
-            and self.result.symbol
-            != evidence.symbol
-        ):
-            raise ValueError(
-                "Evidence symbol does not match "
-                "the integration pipeline."
+                "evidence must be a ResearchEvidence object."
             )
 
         self.result.evidence = evidence
 
-        self._refresh_production_eligibility()
+        return self.result
 
-    # -----------------------------------------------------------------
-    # Build evidence from completed stages
-    # -----------------------------------------------------------------
-
-    def build_evidence(
+    def attach_final_holdout(
         self,
-    ) -> ResearchEvidence:
+        holdout_result: HoldoutPipelineResult | None,
+    ) -> EvidenceItem:
+        """
+        Attach final holdout evidence to the integrated evidence object.
 
-        builder = ResearchEvidenceBuilder(
-            model_id=self.result.model_id,
-            symbol=self.result.symbol,
-            timeframe=self.result.timeframe,
-            horizon=self.result.horizon,
+        If no evidence object exists yet, one is created.
+        """
+
+        if self.result.evidence is None:
+            self.result.evidence = ResearchEvidence(
+                model_id=self.model_id
+            )
+
+        if (
+            self.result.evidence.model_id
+            != self.model_id
+        ):
+            raise ValueError(
+                "ResearchEvidence model_id does not match "
+                "the integration model_id."
+            )
+
+        item = collect_final_holdout_evidence(
+            holdout_result,
+            critical=True,
         )
 
-        stage_to_evidence = {
-            "walk_forward_validation":
-                "walk_forward_validation",
-            "final_holdout":
+        setter = getattr(
+            self.result.evidence,
+            "set_evidence",
+            None,
+        )
+
+        if callable(setter):
+            setter(
+                FINAL_HOLDOUT_STAGE,
+                item,
+            )
+        else:
+            category = getattr(
+                self.result.evidence,
                 "final_holdout",
-            "calibration":
-                "probability_calibration",
-            "range_validation":
-                "target_range_validation",
-            "regime_validation":
-                "regime_validation",
-            "backtest":
-                "backtest",
-            "robustness":
-                "robustness",
-            "leakage_audit":
-                "leakage_audit",
-        }
-
-        for stage_name, evidence_name in (
-            stage_to_evidence.items()
-        ):
-
-            stage = self.result.get_stage(
-                stage_name
+                None,
             )
 
-            if stage is None:
-                continue
+            if isinstance(
+                category,
+                dict,
+            ):
+                category[
+                    FINAL_HOLDOUT_STAGE
+                ] = item
+            else:
+                raise AttributeError(
+                    "ResearchEvidence does not expose a "
+                    "compatible evidence insertion interface."
+                )
 
-            if not stage.completed:
-                continue
-
-            builder.set_evidence(
-                name=evidence_name,
-                status=stage.status,
-                score=stage.score,
-                metrics=stage.metrics,
-                details=stage.details,
-                critical=True,
-                source=stage_name,
-            )
-
-        for warning in (
-            self.result.warnings
-        ):
-            builder.add_warning(
-                warning
-            )
-
-        for error in (
-            self.result.errors
-        ):
-            builder.add_warning(
-                error
-            )
-
-        evidence = builder.build()
-
-        self.result.evidence = evidence
-
-        self._refresh_production_eligibility()
-
-        return evidence
-
-    # -----------------------------------------------------------------
-    # Safety
-    # -----------------------------------------------------------------
-
-    def can_proceed(
-        self,
-        stage_name: str,
-    ) -> bool:
-
-        stage = self._require_stage(
-            stage_name
+        self._record_final_holdout_stage(
+            item
         )
 
-        if self.result.errors:
+        return item
+
+    def _record_final_holdout_stage(
+        self,
+        item: EvidenceItem,
+    ) -> None:
+        stage = self._get_stage(
+            FINAL_HOLDOUT_STAGE
+        )
+
+        if item.status == EvidenceStatus.PASS:
+            stage.complete(
+                score=item.score,
+                metrics=item.metrics,
+                details=item.details,
+            )
+
+        elif item.status == EvidenceStatus.FAIL:
+            stage.fail(
+                item.details
+            )
+
+            self.result.errors.append(
+                f"{FINAL_HOLDOUT_STAGE}: "
+                f"{item.details}"
+            )
+
+        else:
+            stage.status = "NOT_EVALUATED"
+            stage.details = item.details
+
+            self.result.warnings.append(
+                f"{FINAL_HOLDOUT_STAGE}: "
+                f"{item.details}"
+            )
+
+    def evaluate_production_eligibility(
+        self,
+    ) -> bool:
+        """
+        Evaluate whether integrated evidence is sufficient for
+        the production approval boundary.
+
+        This method does not grant production approval.
+        """
+
+        if self.result.evidence is None:
+            self.result.production_eligible = False
             return False
 
-        previous = self._previous_stages(
-            stage_name
-        )
+        failed_stages = self.failed_stages()
 
-        for previous_stage in previous:
+        if failed_stages:
+            self.result.production_eligible = False
+            return False
 
-            if not previous_stage.completed:
-                return False
+        incomplete = self.incomplete_stages()
 
-            if previous_stage.status == (
-                EvidenceStatus.FAIL
-            ):
-                return False
-
-        return True
-
-    def assert_can_proceed(
-        self,
-        stage_name: str,
-    ) -> None:
-
-        if not self.can_proceed(
-            stage_name
-        ):
-            stage = self._require_stage(
-                stage_name
-            )
-
-            raise RuntimeError(
-                "Cannot proceed to stage "
-                f"'{stage.name}'. A previous stage "
-                "is incomplete or has failed."
-            )
-
-    def _refresh_production_eligibility(
-        self,
-    ) -> None:
+        if incomplete:
+            self.result.production_eligible = False
+            return False
 
         evidence = self.result.evidence
 
-        if evidence is None:
-            self.result.production_eligible = (
-                False
+        try:
+            eligible = bool(
+                evidence.production_eligible()
             )
-            return
+        except Exception:
+            eligible = False
 
         self.result.production_eligible = (
-            evidence.production_eligible()
-            and not self.result.errors
+            eligible
         )
 
-    # -----------------------------------------------------------------
-    # Internal helpers
-    # -----------------------------------------------------------------
+        return eligible
 
-    def _require_stage(
+    def can_proceed(
         self,
-        name: str,
-    ) -> IntegrationStage:
+        next_stage: str,
+    ) -> bool:
+        """
+        Determine whether the named stage may proceed.
 
-        stage = self.result.get_stage(
-            name
+        Final holdout has an additional strict requirement:
+        all development stages must already be complete.
+        """
+
+        self._get_stage(
+            next_stage
         )
 
-        if stage is None:
-            raise ValueError(
-                f"Unknown integration stage: {name}"
+        ordered = list(
+            self.result.stages.keys()
+        )
+
+        position = ordered.index(
+            next_stage
+        )
+
+        if position == 0:
+            return True
+
+        previous = ordered[
+            :position
+        ]
+
+        return all(
+            self.result.stages[name].status
+            == "COMPLETE"
+            for name in previous
+        )
+
+    def assert_can_proceed(
+        self,
+        next_stage: str,
+    ) -> None:
+        if not self.can_proceed(
+            next_stage
+        ):
+            raise RuntimeError(
+                f"Research pipeline cannot proceed to "
+                f"'{next_stage}'. One or more preceding "
+                f"stages are incomplete or failed."
             )
 
-        return stage
-
-    def _previous_stages(
+    def complete(
         self,
-        name: str,
-    ) -> list[IntegrationStage]:
+    ) -> IntegratedResearchResult:
+        """
+        Complete the integration only when every stage and required
+        evidence item has passed.
 
-        names = [
-            stage.name
-            for stage in self.result.stages
-        ]
+        Production approval remains false here.
+        """
 
-        index = names.index(
-            name
-        )
+        if self.result.errors:
+            self.result.status = "FAILED"
+            self.result.production_eligible = False
+            return self.result
+
+        incomplete = self.incomplete_stages()
+
+        if incomplete:
+            self.result.status = "BLOCKED"
+            self.result.production_eligible = False
+            return self.result
+
+        eligible = self.evaluate_production_eligibility()
+
+        if not eligible:
+            self.result.status = "BLOCKED"
+            self.result.production_eligible = False
+            return self.result
+
+        self.result.status = "COMPLETE"
+
+        # This integration layer never grants production approval.
+        self.result.metadata[
+            "production_approved"
+        ] = False
+
+        self.result.metadata[
+            "completed_at"
+        ] = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+        return self.result
+
+    def _get_stage(
+        self,
+        stage_name: str,
+    ) -> IntegrationStage:
+        if stage_name not in self.result.stages:
+            raise KeyError(
+                f"Unknown research stage: "
+                f"{stage_name}"
+            )
 
         return self.result.stages[
-            :index
+            stage_name
         ]
-
-
-# ---------------------------------------------------------------------
-# Convenience API
-# ---------------------------------------------------------------------
 
 
 def create_research_integrator(
-    model_id: str | None = None,
-    symbol: str | None = None,
-    timeframe: str | None = None,
-    horizon: int | None = None,
+    model_id: str,
+    stage_names: tuple[str, ...] | None = None,
 ) -> ResearchPipelineIntegrator:
+    """Create a fresh master research integrator."""
 
     return ResearchPipelineIntegrator(
         model_id=model_id,
-        symbol=symbol,
-        timeframe=timeframe,
-        horizon=horizon,
+        stage_names=stage_names,
     )
 
 
+def integrate_final_holdout(
+    *,
+    model_id: str,
+    holdout_result: HoldoutPipelineResult | None,
+) -> IntegratedResearchResult:
+    """
+    Convenience helper for attaching final holdout evidence to a
+    fresh integration result.
+
+    The resulting pipeline remains research-only.
+    """
+
+    integrator = ResearchPipelineIntegrator(
+        model_id=model_id
+    )
+
+    integrator.start()
+
+    integrator.attach_final_holdout(
+        holdout_result
+    )
+
+    return integrator.result
+
+
 __all__ = [
-    "IntegrationStatus",
+    "FINAL_HOLDOUT_STAGE",
+    "DEFAULT_INTEGRATION_STAGES",
     "IntegrationStage",
     "IntegratedResearchResult",
-    "DEFAULT_INTEGRATION_STAGES",
     "ResearchPipelineIntegrator",
     "create_research_integrator",
+    "integrate_final_holdout",
 ]
