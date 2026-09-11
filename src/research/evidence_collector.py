@@ -1,533 +1,353 @@
 """
-AI Swing Analyser — Research Evidence Collector.
+AI Swing Analyser — Final Holdout Evidence Integration.
 
-Collects evidence produced by independent research stages and converts
-it into the common ResearchEvidence representation.
+Adds the protected final-holdout result to the centralized
+ResearchEvidence collection framework.
 
-This module intentionally does NOT approve models.
+The collector remains fail-closed:
+    missing / invalid holdout evidence
+        -> NOT production eligible
 
-Approval remains fail-closed and is handled by the dedicated approval
-layer after all required evidence has been collected.
+A passing holdout result is evidence only.
+It does not grant production approval.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+from .final_holdout_evidence import (
+    adapt_final_holdout_result,
+)
 from .integration import (
     EvidenceItem,
     EvidenceStatus,
     ResearchEvidence,
-    ResearchEvidenceBuilder,
 )
-from .stage_adapters import (
-    adapt_backtest_result,
-    adapt_calibration_result,
-    adapt_holdout_result,
-    adapt_leakage_result,
-    adapt_range_result,
-    adapt_regime_result,
-    adapt_robustness_result,
-    adapt_walk_forward_result,
+from .pipeline_holdout import (
+    HoldoutPipelineResult,
 )
 
 
-# ---------------------------------------------------------------------
-# Stage names
-# ---------------------------------------------------------------------
+FINAL_HOLDOUT_STAGE = "final_holdout"
 
 
-WALK_FORWARD = "walk_forward_validation"
-HOLDOUT = "final_holdout"
-CALIBRATION = "calibration"
-RANGE_VALIDATION = "range_validation"
-REGIME_VALIDATION = "regime_validation"
-BACKTEST = "backtest"
-ROBUSTNESS = "robustness"
-LEAKAGE_AUDIT = "leakage_audit"
-
-
-REQUIRED_EVIDENCE_STAGES = (
-    WALK_FORWARD,
-    HOLDOUT,
-    CALIBRATION,
-    RANGE_VALIDATION,
-    REGIME_VALIDATION,
-    BACKTEST,
-    ROBUSTNESS,
-    LEAKAGE_AUDIT,
-)
-
-
-# ---------------------------------------------------------------------
-# Collector result
-# ---------------------------------------------------------------------
-
-
-@dataclass
-class EvidenceCollectionResult:
-    """
-    Result of collecting evidence from research stages.
-    """
-
-    evidence: ResearchEvidence
-
-    collected_stages: list[str] = field(
-        default_factory=list
-    )
-
-    missing_stages: list[str] = field(
-        default_factory=list
-    )
-
-    errors: list[str] = field(
-        default_factory=list
-    )
-
-    warnings: list[str] = field(
-        default_factory=list
-    )
-
-    metadata: dict[str, Any] = field(
-        default_factory=dict
-    )
-
-    @property
-    def successful(self) -> bool:
-        """
-        Evidence collection itself succeeded.
-
-        This does not mean the model passed the research gates.
-        """
-
-        return not self.errors
-
-    @property
-    def production_eligible(self) -> bool:
-        """
-        Whether the collected evidence is sufficient for production
-        eligibility according to the fail-closed evidence framework.
-        """
-
-        return self.evidence.production_eligible
-
-
-# ---------------------------------------------------------------------
-# Collector
-# ---------------------------------------------------------------------
-
-
-class ResearchEvidenceCollector:
-    """
-    Collects evidence from completed research-stage results.
-
-    The collector is deliberately conservative:
-
-    - Missing evidence is not converted into PASS.
-    - Ambiguous stage results are not converted into PASS.
-    - Adapter failures are recorded as errors.
-    - Final holdout contamination remains a failure.
-    - Leakage failures remain critical.
-    """
-
-    def __init__(
-        self,
-        *,
-        required_stages: tuple[str, ...] = (
-            REQUIRED_EVIDENCE_STAGES
-        ),
-    ) -> None:
-
-        self.required_stages = tuple(
-            required_stages
-        )
-
-        unknown = set(
-            self.required_stages
-        ) - set(
-            REQUIRED_EVIDENCE_STAGES
-        )
-
-        if unknown:
-            raise ValueError(
-                "Unknown evidence stage(s): "
-                f"{sorted(unknown)}"
-            )
-
-    # -----------------------------------------------------------------
-    # Individual adapters
-    # -----------------------------------------------------------------
-
-    @staticmethod
-    def adapt_stage(
-        stage_name: str,
-        result: Any,
-    ) -> EvidenceItem:
-
-        if stage_name == WALK_FORWARD:
-            return adapt_walk_forward_result(
-                result
-            )
-
-        if stage_name == HOLDOUT:
-            return adapt_holdout_result(
-                result
-            )
-
-        if stage_name == CALIBRATION:
-            return adapt_calibration_result(
-                result
-            )
-
-        if stage_name == RANGE_VALIDATION:
-            return adapt_range_result(
-                result
-            )
-
-        if stage_name == REGIME_VALIDATION:
-            return adapt_regime_result(
-                result
-            )
-
-        if stage_name == BACKTEST:
-            return adapt_backtest_result(
-                result
-            )
-
-        if stage_name == ROBUSTNESS:
-            return adapt_robustness_result(
-                result
-            )
-
-        if stage_name == LEAKAGE_AUDIT:
-            return adapt_leakage_result(
-                result
-            )
-
-        raise ValueError(
-            f"Unsupported evidence stage: {stage_name}"
-        )
-
-    # -----------------------------------------------------------------
-    # Collection
-    # -----------------------------------------------------------------
-
-    def collect(
-        self,
-        results: Mapping[str, Any],
-        *,
-        model_id: str | None = None,
-        experiment_id: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
-    ) -> EvidenceCollectionResult:
-
-        builder = ResearchEvidenceBuilder()
-
-        collected: list[str] = []
-        missing: list[str] = []
-        errors: list[str] = []
-        warnings: list[str] = []
-
-        for stage_name in self.required_stages:
-
-            if stage_name not in results:
-                missing.append(
-                    stage_name
-                )
-
-                warnings.append(
-                    f"Missing required evidence stage: "
-                    f"{stage_name}"
-                )
-
-                continue
-
-            result = results[stage_name]
-
-            if result is None:
-                missing.append(
-                    stage_name
-                )
-
-                warnings.append(
-                    f"Evidence result is None: "
-                    f"{stage_name}"
-                )
-
-                continue
-
-            try:
-                evidence_item = self.adapt_stage(
-                    stage_name,
-                    result,
-                )
-
-                self._attach_item(
-                    builder,
-                    stage_name,
-                    evidence_item,
-                )
-
-                collected.append(
-                    stage_name
-                )
-
-                if (
-                    evidence_item.status
-                    == EvidenceStatus.WARNING
-                ):
-                    warnings.append(
-                        f"Research stage produced a warning: "
-                        f"{stage_name}"
-                    )
-
-                if (
-                    evidence_item.status
-                    == EvidenceStatus.NOT_EVALUATED
-                ):
-                    warnings.append(
-                        f"Research stage was not fully evaluated: "
-                        f"{stage_name}"
-                    )
-
-                if (
-                    evidence_item.status
-                    == EvidenceStatus.FAIL
-                ):
-                    warnings.append(
-                        f"Research stage failed its evidence gate: "
-                        f"{stage_name}"
-                    )
-
-            except Exception as exc:
-                errors.append(
-                    f"Failed to adapt {stage_name}: "
-                    f"{type(exc).__name__}: {exc}"
-                )
-
-        evidence_metadata = dict(
-            metadata or {}
-        )
-
-        evidence_metadata.update(
-            {
-                "required_stages": list(
-                    self.required_stages
-                ),
-                "collected_stages": collected,
-                "missing_stages": missing,
-                "collection_errors": list(
-                    errors
-                ),
-                "research_only": True,
-            }
-        )
-
-        evidence = builder.build(
-            model_id=model_id,
-            experiment_id=experiment_id,
-            metadata=evidence_metadata,
-        )
-
-        # Missing or adapter-error stages must never silently disappear.
-        if missing:
-            evidence.warnings.extend(
-                [
-                    f"Missing required evidence: {stage}"
-                    for stage in missing
-                ]
-            )
-
-        if errors:
-            evidence.warnings.extend(
-                [
-                    f"Evidence collection error: {error}"
-                    for error in errors
-                ]
-            )
-
-        return EvidenceCollectionResult(
-            evidence=evidence,
-            collected_stages=collected,
-            missing_stages=missing,
-            errors=errors,
-            warnings=warnings,
-            metadata=evidence_metadata,
-        )
-
-    # -----------------------------------------------------------------
-    # Builder attachment
-    # -----------------------------------------------------------------
-
-    @staticmethod
-    def _attach_item(
-        builder: ResearchEvidenceBuilder,
-        stage_name: str,
-        item: EvidenceItem,
-    ) -> None:
-
-        if stage_name == WALK_FORWARD:
-            builder.set_validation(
-                item
-            )
-            return
-
-        if stage_name == HOLDOUT:
-            builder.set_holdout(
-                item
-            )
-            return
-
-        if stage_name == CALIBRATION:
-            builder.set_calibration(
-                item
-            )
-            return
-
-        if stage_name == RANGE_VALIDATION:
-            builder.set_range_validation(
-                item
-            )
-            return
-
-        if stage_name == REGIME_VALIDATION:
-            builder.set_regime(
-                item
-            )
-            return
-
-        if stage_name == BACKTEST:
-            builder.set_backtest(
-                item
-            )
-            return
-
-        if stage_name == ROBUSTNESS:
-            builder.set_robustness(
-                item
-            )
-            return
-
-        if stage_name == LEAKAGE_AUDIT:
-            builder.set_leakage(
-                item
-            )
-            return
-
-        raise ValueError(
-            f"Unsupported evidence stage: {stage_name}"
-        )
-
-    # -----------------------------------------------------------------
-    # Convenience checks
-    # -----------------------------------------------------------------
-
-    def missing_required_stages(
-        self,
-        results: Mapping[str, Any],
-    ) -> list[str]:
-
-        return [
-            stage
-            for stage in self.required_stages
-            if stage not in results
-            or results[stage] is None
-        ]
-
-    def all_required_results_present(
-        self,
-        results: Mapping[str, Any],
-    ) -> bool:
-
-        return not self.missing_required_stages(
-            results
-        )
-
-    def summarize(
-        self,
-        result: EvidenceCollectionResult,
-    ) -> dict[str, Any]:
-
-        evidence = result.evidence
-
-        return {
-            "successful_collection": (
-                result.successful
-            ),
-            "production_eligible": (
-                result.production_eligible
-            ),
-            "required_stage_count": len(
-                self.required_stages
-            ),
-            "collected_stage_count": len(
-                result.collected_stages
-            ),
-            "missing_stage_count": len(
-                result.missing_stages
-            ),
-            "error_count": len(
-                result.errors
-            ),
-            "warning_count": len(
-                result.warnings
-            ),
-            "failed_evidence": [
-                item.name
-                for item in evidence.failed_items()
-            ],
-            "missing_evidence": [
-                item.name
-                for item in evidence.missing_items()
-            ],
-            "critical_failures": [
-                item.name
-                for item in evidence.critical_failures()
-            ],
-            "evidence_score": (
-                evidence.evidence_score()
-            ),
-        }
-
-
-# ---------------------------------------------------------------------
-# Convenience API
-# ---------------------------------------------------------------------
-
-
-def collect_research_evidence(
-    results: Mapping[str, Any],
+def collect_final_holdout_evidence(
+    result: HoldoutPipelineResult | None,
     *,
-    model_id: str | None = None,
-    experiment_id: str | None = None,
-    metadata: Mapping[str, Any] | None = None,
-) -> EvidenceCollectionResult:
+    critical: bool = True,
+) -> EvidenceItem:
     """
-    Convenience wrapper around ResearchEvidenceCollector.
+    Convert the final holdout pipeline result into an EvidenceItem.
+
+    None is intentionally treated as NOT_EVALUATED rather than PASS.
     """
 
-    collector = ResearchEvidenceCollector()
+    if result is None:
+        return EvidenceItem(
+            name=FINAL_HOLDOUT_STAGE,
+            status=EvidenceStatus.NOT_EVALUATED,
+            score=None,
+            threshold=0.95,
+            metrics={},
+            details=(
+                "Final holdout evidence is missing. "
+                "The final holdout cannot be considered evaluated."
+            ),
+            critical=critical,
+            source="FinalHoldoutEvidenceCollector",
+        )
 
-    return collector.collect(
-        results,
-        model_id=model_id,
-        experiment_id=experiment_id,
-        metadata=metadata,
+    return adapt_final_holdout_result(
+        result,
+        critical=critical,
     )
+
+
+def attach_final_holdout_to_evidence(
+    evidence: ResearchEvidence,
+    result: HoldoutPipelineResult | None,
+    *,
+    critical: bool = True,
+) -> EvidenceItem:
+    """
+    Add final holdout evidence to ResearchEvidence.
+
+    This function supports the common dictionary-based evidence
+    structure used by the research evidence framework.
+    """
+
+    if not isinstance(
+        evidence,
+        ResearchEvidence,
+    ):
+        raise TypeError(
+            "evidence must be a ResearchEvidence object."
+        )
+
+    item = collect_final_holdout_evidence(
+        result,
+        critical=critical,
+    )
+
+    # Preferred interface when available.
+    setter = getattr(
+        evidence,
+        "set_evidence",
+        None,
+    )
+
+    if callable(setter):
+        setter(
+            item.name,
+            item,
+        )
+        return item
+
+    # Support the existing category-style representation.
+    for attribute_name in (
+        "final_holdout",
+        "holdout",
+    ):
+        container = getattr(
+            evidence,
+            attribute_name,
+            None,
+        )
+
+        if isinstance(
+            container,
+            dict,
+        ):
+            container[item.name] = item
+            return item
+
+    # Last-resort dictionary-like evidence storage.
+    items = getattr(
+        evidence,
+        "evidence",
+        None,
+    )
+
+    if isinstance(
+        items,
+        dict,
+    ):
+        items[item.name] = item
+        return item
+
+    raise AttributeError(
+        "ResearchEvidence does not expose a supported "
+        "evidence insertion interface."
+    )
+
+
+def build_final_holdout_evidence(
+    *,
+    model_id: str,
+    result: HoldoutPipelineResult | None,
+    critical: bool = True,
+) -> EvidenceItem:
+    """
+    Build final holdout evidence with model identity checks.
+
+    The model identity is recorded in the evidence details/metrics
+    but does not alter the evaluation itself.
+    """
+
+    item = collect_final_holdout_evidence(
+        result,
+        critical=critical,
+    )
+
+    metrics = dict(
+        item.metrics
+    )
+
+    metrics["model_id"] = model_id
+
+    details = item.details
+
+    if model_id:
+        details = (
+            f"Model '{model_id}': "
+            f"{details}"
+        )
+
+    return EvidenceItem(
+        name=item.name,
+        status=item.status,
+        score=item.score,
+        threshold=item.threshold,
+        metrics=metrics,
+        details=details,
+        critical=item.critical,
+        source=item.source,
+    )
+
+
+def final_holdout_passed(
+    result: HoldoutPipelineResult | None,
+) -> bool:
+    """Return True only when final holdout evidence explicitly passes."""
+
+    item = collect_final_holdout_evidence(
+        result
+    )
+
+    return (
+        item.status
+        == EvidenceStatus.PASS
+    )
+
+
+def final_holdout_evaluated(
+    result: HoldoutPipelineResult | None,
+) -> bool:
+    """Return True only when a completed evaluation exists."""
+
+    if result is None:
+        return False
+
+    return bool(
+        result.evaluated
+        and result.completed
+        and result.final_holdout_used
+    )
+
+
+def final_holdout_status(
+    result: HoldoutPipelineResult | None,
+) -> EvidenceStatus:
+    """Return the evidence status for the final holdout."""
+
+    return collect_final_holdout_evidence(
+        result
+    ).status
+
+
+def final_holdout_summary(
+    result: HoldoutPipelineResult | None,
+) -> dict[str, Any]:
+    """Return a dashboard-safe final holdout summary."""
+
+    item = collect_final_holdout_evidence(
+        result
+    )
+
+    return {
+        "name": item.name,
+        "status": item.status.value,
+        "score": item.score,
+        "threshold": item.threshold,
+        "critical": item.critical,
+        "metrics": dict(item.metrics),
+        "details": item.details,
+        "source": item.source,
+        "evaluated": (
+            final_holdout_evaluated(result)
+        ),
+        "passed": (
+            item.status
+            == EvidenceStatus.PASS
+        ),
+        "production_approved": False,
+        "research_only": True,
+    }
+
+
+def validate_final_holdout_identity(
+    result: HoldoutPipelineResult | None,
+    expected_model_id: str,
+) -> bool:
+    """
+    Verify that the holdout result belongs to the expected model.
+
+    This prevents evidence from one model being accidentally attached
+    to another model's approval record.
+    """
+
+    if result is None:
+        return False
+
+    if not expected_model_id:
+        return False
+
+    return (
+        result.model_id
+        == expected_model_id
+    )
+
+
+def collect_holdout_evidence_map(
+    results: Mapping[
+        str,
+        HoldoutPipelineResult | None,
+    ],
+    *,
+    critical: bool = True,
+) -> dict[str, EvidenceItem]:
+    """
+    Convert multiple model holdout results into an evidence map.
+
+    This is useful when several horizons/models are evaluated.
+    """
+
+    collected: dict[
+        str,
+        EvidenceItem,
+    ] = {}
+
+    for model_id, result in results.items():
+        if not model_id:
+            continue
+
+        if result is not None:
+            if not validate_final_holdout_identity(
+                result,
+                model_id,
+            ):
+                collected[model_id] = (
+                    EvidenceItem(
+                        name=FINAL_HOLDOUT_STAGE,
+                        status=EvidenceStatus.FAIL,
+                        score=None,
+                        threshold=0.95,
+                        metrics={
+                            "model_id": model_id,
+                        },
+                        details=(
+                            "Final holdout evidence belongs to a "
+                            "different model identity."
+                        ),
+                        critical=critical,
+                        source=(
+                            "FinalHoldoutEvidenceCollector"
+                        ),
+                    )
+                )
+                continue
+
+        collected[model_id] = (
+            build_final_holdout_evidence(
+                model_id=model_id,
+                result=result,
+                critical=critical,
+            )
+        )
+
+    return collected
 
 
 __all__ = [
-    "WALK_FORWARD",
-    "HOLDOUT",
-    "CALIBRATION",
-    "RANGE_VALIDATION",
-    "REGIME_VALIDATION",
-    "BACKTEST",
-    "ROBUSTNESS",
-    "LEAKAGE_AUDIT",
-    "REQUIRED_EVIDENCE_STAGES",
-    "EvidenceCollectionResult",
-    "ResearchEvidenceCollector",
-    "collect_research_evidence",
+    "FINAL_HOLDOUT_STAGE",
+    "collect_final_holdout_evidence",
+    "attach_final_holdout_to_evidence",
+    "build_final_holdout_evidence",
+    "final_holdout_passed",
+    "final_holdout_evaluated",
+    "final_holdout_status",
+    "final_holdout_summary",
+    "validate_final_holdout_identity",
+    "collect_holdout_evidence_map",
 ]
