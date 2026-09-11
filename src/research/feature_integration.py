@@ -40,6 +40,9 @@ from src.features.engine import (
 from src.features.multi_timeframe import (
     build_multi_timeframe_dataset,
 )
+from .market_context import (
+    add_relative_strength,
+)
 from .market_data_context import (
     MarketContextData,
 )
@@ -54,17 +57,13 @@ class UnifiedFeatureConfig:
     """Configuration for unified feature construction."""
 
     include_market_context: bool = True
-
     include_relative_strength: bool = True
-
     include_multi_timeframe: bool = True
 
     benchmark: str = "NIFTY50"
-
     relative_strength_window: int = 20
 
     max_missing_fraction: float = 0.40
-
     reject_future_columns: bool = True
 
     def __post_init__(self) -> None:
@@ -270,95 +269,36 @@ def _validate_feature_names(
         )
 
 
-def _numeric_feature_names(
-    data: pd.DataFrame,
-    feature_names: list[str],
-) -> list[str]:
-    """Return only numeric feature columns."""
-
-    numeric = []
-
-    for column in feature_names:
-        if pd.api.types.is_numeric_dtype(
-            data[column]
-        ):
-            numeric.append(column)
-
-    return numeric
-
-
-def _remove_high_missing(
-    data: pd.DataFrame,
-    feature_names: list[str],
-    threshold: float,
-) -> tuple[
-    pd.DataFrame,
-    list[str],
-    list[str],
-]:
-    """
-    Remove features exceeding the missing-value threshold.
-
-    This operation is deterministic and does not inspect targets.
-    """
-
-    missing_fraction = data[
-        feature_names
-    ].isna().mean()
-
-    removed = [
-        column
-        for column in feature_names
-        if missing_fraction[column]
-        > threshold
-    ]
-
-    kept = [
-        column
-        for column in feature_names
-        if column not in removed
-    ]
-
-    result = data.copy(
-        deep=True
-    )
-
-    return (
-        result,
-        kept,
-        removed,
-    )
-
-
 def _build_base_features(
     stock_data: pd.DataFrame,
 ) -> FeatureSet:
-    """
-    Build the existing base feature stack.
+    """Build the existing base feature stack."""
 
-    The existing engine already combines:
-    technical indicators,
-    price action,
-    volume and regime features.
-    """
-
-    return engineer_features(
+    result = engineer_features(
         stock_data.copy(
             deep=True
         )
     )
 
+    if not isinstance(
+        result,
+        FeatureSet,
+    ):
+        raise TypeError(
+            "engineer_features must return FeatureSet."
+        )
+
+    return result
+
 
 def _integrate_multi_timeframe(
     stock_data: pd.DataFrame,
-    timeframe_data: dict[str, pd.DataFrame],
+    timeframe_data: dict[
+        str,
+        pd.DataFrame,
+    ],
 ) -> pd.DataFrame:
-    """
-    Build multi-timeframe features.
-
-    Higher-timeframe features are aligned through the existing
-    leakage-safe multi-timeframe feature implementation.
-    """
+    """Build leakage-safe multi-timeframe features."""
 
     if not timeframe_data:
         return stock_data.copy(
@@ -387,6 +327,8 @@ def _identify_added_columns(
     original_columns: list[str],
     combined_columns: list[str],
 ) -> list[str]:
+    """Identify columns added to the original dataframe."""
+
     original = set(
         original_columns
     )
@@ -396,6 +338,112 @@ def _identify_added_columns(
         for column in combined_columns
         if column not in original
     ]
+
+
+def _remove_high_missing(
+    data: pd.DataFrame,
+    feature_names: list[str],
+    threshold: float,
+) -> tuple[
+    pd.DataFrame,
+    list[str],
+    list[str],
+]:
+    """Remove features exceeding the missing-value threshold."""
+
+    if not feature_names:
+        return (
+            data.copy(deep=True),
+            [],
+            [],
+        )
+
+    missing_fraction = data[
+        feature_names
+    ].isna().mean()
+
+    removed = [
+        column
+        for column in feature_names
+        if missing_fraction[column]
+        > threshold
+    ]
+
+    kept = [
+        column
+        for column in feature_names
+        if column not in removed
+    ]
+
+    return (
+        data.copy(deep=True),
+        kept,
+        removed,
+    )
+
+
+def _collect_feature_names(
+    base_result: FeatureSet,
+    data: pd.DataFrame,
+    original_columns: set[str],
+    mtf_feature_names: list[str],
+    market_feature_names: list[str],
+    *,
+    reject_future_columns: bool,
+) -> list[str]:
+    """
+    Build the final deterministic feature-name list.
+
+    The FeatureSet produced by the existing feature engine is
+    authoritative for base features.
+    """
+
+    excluded = {
+        "Symbol",
+        "_source_time",
+        "_base_time",
+    }
+
+    feature_names: list[str] = []
+
+    for column in base_result.feature_names:
+        if (
+            column in data.columns
+            and column not in excluded
+            and column not in feature_names
+        ):
+            feature_names.append(
+                column
+            )
+
+    for column in mtf_feature_names:
+        if (
+            column in data.columns
+            and column not in original_columns
+            and column not in feature_names
+        ):
+            feature_names.append(
+                column
+            )
+
+    for column in market_feature_names:
+        if (
+            column in data.columns
+            and column not in original_columns
+            and column not in feature_names
+        ):
+            feature_names.append(
+                column
+            )
+
+    _validate_feature_names(
+        feature_names,
+        reject_future_columns=(
+            reject_future_columns
+        ),
+    )
+
+    return feature_names
 
 
 def build_unified_features(
@@ -427,25 +475,21 @@ def build_unified_features(
         deep=True
     )
 
+    original_columns = set(
+        original.columns
+    )
+
     warnings: list[str] = []
 
     # ---------------------------------------------------------------
-    # 1. Base feature engineering
+    # 1. Base features
     # ---------------------------------------------------------------
 
     base_result = _build_base_features(
         original
     )
 
-    if not isinstance(
-        base_result,
-        FeatureSet,
-    ):
-        raise TypeError(
-            "engineer_features must return FeatureSet."
-        )
-
-    base_data = base_result.data.copy(
+    combined = base_result.data.copy(
         deep=True
     )
 
@@ -454,7 +498,7 @@ def build_unified_features(
     )
 
     # ---------------------------------------------------------------
-    # 2. Multi-timeframe integration
+    # 2. Multi-timeframe features
     # ---------------------------------------------------------------
 
     mtf_feature_names: list[str] = []
@@ -468,31 +512,29 @@ def build_unified_features(
             timeframe_data,
         )
 
-        # Only retain columns that were added by
-        # multi-timeframe processing.
         mtf_added = _identify_added_columns(
             list(original.columns),
             list(mtf_data.columns),
         )
 
-        mtf_added = [
+        for column in mtf_added:
+            if column not in combined.columns:
+                combined[column] = (
+                    mtf_data[column]
+                    .reindex(
+                        combined.index
+                    )
+                )
+
+        mtf_feature_names = [
             column
             for column in mtf_added
-            if column not in base_data.columns
+            if column in combined.columns
+            and column not in base_feature_names
         ]
 
-        for column in mtf_added:
-            base_data[column] = (
-                mtf_data[column]
-                .reindex(
-                    base_data.index
-                )
-            )
-
-        mtf_feature_names = mtf_added
-
     # ---------------------------------------------------------------
-    # 3. Market-context integration
+    # 3. Market context
     # ---------------------------------------------------------------
 
     market_feature_names: list[str] = []
@@ -502,7 +544,7 @@ def build_unified_features(
         and market_context is not None
     ):
         market_result = integrate_market_context(
-            base_data,
+            combined,
             market_context,
             config=MarketIntegrationConfig(
                 benchmark=cfg.benchmark,
@@ -513,7 +555,7 @@ def build_unified_features(
             ),
         )
 
-        base_data = market_result.data.copy(
+        combined = market_result.data.copy(
             deep=True
         )
 
@@ -526,8 +568,11 @@ def build_unified_features(
                 market_result.relative_strength_columns
             )
         else:
-            base_data = base_data.drop(
-                columns=market_result.relative_strength_columns,
+            combined = combined.drop(
+                columns=(
+                    market_result
+                    .relative_strength_columns
+                ),
                 errors="ignore",
             )
 
@@ -542,103 +587,35 @@ def build_unified_features(
         )
 
     # ---------------------------------------------------------------
-    # 4. Identify complete feature set
+    # 4. Final feature names
     # ---------------------------------------------------------------
 
-    original_columns = set(
-        original.columns
-    )
-
-    excluded = {
-        "Symbol",
-        "_source_time",
-        "_base_time",
-    }
-
-    feature_names = [
-        column
-        for column in base_data.columns
-        if column not in original_columns
-        and column not in excluded
-    ]
-
-    # Include numeric original OHLCV columns as model inputs only
-    # when they were already handled by the existing engine.
-    #
-    # The feature engine is authoritative for base feature names.
-    for column in base_feature_names:
-        if (
-            column in base_data.columns
-            and column not in feature_names
-            and column not in excluded
-        ):
-            feature_names.append(
-                column
-            )
-
-    # Add MTF features.
-    for column in mtf_feature_names:
-        if (
-            column in base_data.columns
-            and column not in feature_names
-        ):
-            feature_names.append(
-                column
-            )
-
-    # Add market features.
-    for column in market_feature_names:
-        if (
-            column in base_data.columns
-            and column not in feature_names
-        ):
-            feature_names.append(
-                column
-            )
-
-    # Keep only features that actually exist.
-    feature_names = [
-        column
-        for column in feature_names
-        if column in base_data.columns
-    ]
-
-    _validate_feature_names(
-        feature_names,
+    feature_names = _collect_feature_names(
+        base_result,
+        combined,
+        original_columns,
+        mtf_feature_names,
+        market_feature_names,
         reject_future_columns=(
             cfg.reject_future_columns
         ),
     )
 
-    numeric_features = _numeric_feature_names(
-        base_data,
-        feature_names,
-    )
-
-    if len(numeric_features) != len(
-        feature_names
-    ):
-        non_numeric = [
-            column
-            for column in feature_names
-            if column not in numeric_features
-        ]
-
-        raise TypeError(
-            "Non-numeric model features detected: "
-            f"{non_numeric}"
+    if not feature_names:
+        raise ValueError(
+            "No usable features were generated."
         )
 
     # ---------------------------------------------------------------
-    # 5. Missing-value screening
+    # 5. Missing feature filtering
     # ---------------------------------------------------------------
 
     (
-        base_data,
-        kept_features,
+        combined,
+        feature_names,
         removed_features,
     ) = _remove_high_missing(
-        base_data,
+        combined,
         feature_names,
         cfg.max_missing_fraction,
     )
@@ -651,44 +628,48 @@ def build_unified_features(
             )
         )
 
-    feature_names = kept_features
-
     if not feature_names:
         raise ValueError(
-            "No usable features remain after feature validation."
+            "No features remain after missing-value filtering."
         )
 
     # ---------------------------------------------------------------
-    # 6. Numeric/finite validation
+    # 6. Numeric validation
     # ---------------------------------------------------------------
 
-    values = base_data[
-        feature_names
-    ].apply(
-        pd.to_numeric,
-        errors="coerce",
-    )
-
-    finite_check = np.isfinite(
-        values.fillna(0.0).to_numpy()
-    )
-
-    if not finite_check.all():
-        raise ValueError(
-            "Feature dataframe contains non-finite values."
-        )
+    numeric_features = []
 
     for column in feature_names:
-        base_data[column] = pd.to_numeric(
-            base_data[column],
-            errors="coerce",
+        if not pd.api.types.is_numeric_dtype(
+            combined[column]
+        ):
+            raise TypeError(
+                "Non-numeric model feature detected: "
+                f"{column}"
+            )
+
+        numeric_features.append(
+            column
+        )
+
+    numeric_values = combined[
+        numeric_features
+    ]
+
+    finite_values = np.isfinite(
+        numeric_values.fillna(0.0).to_numpy()
+    )
+
+    if not finite_values.all():
+        raise ValueError(
+            "Feature dataframe contains non-finite values."
         )
 
     # ---------------------------------------------------------------
     # 7. Timeline integrity
     # ---------------------------------------------------------------
 
-    if not base_data.index.equals(
+    if not combined.index.equals(
         original.index
     ):
         raise RuntimeError(
@@ -696,7 +677,29 @@ def build_unified_features(
         )
 
     # ---------------------------------------------------------------
-    # 8. Final metadata
+    # 8. Keep feature-category lists consistent
+    # ---------------------------------------------------------------
+
+    final_base_features = [
+        column
+        for column in base_feature_names
+        if column in feature_names
+    ]
+
+    final_mtf_features = [
+        column
+        for column in mtf_feature_names
+        if column in feature_names
+    ]
+
+    final_market_features = [
+        column
+        for column in market_feature_names
+        if column in feature_names
+    ]
+
+    # ---------------------------------------------------------------
+    # 9. Final metadata
     # ---------------------------------------------------------------
 
     metadata = {
@@ -706,13 +709,13 @@ def build_unified_features(
         "target_columns_included": False,
         "final_holdout_used": False,
         "base_feature_count": len(
-            base_feature_names
+            final_base_features
         ),
         "multi_timeframe_feature_count": len(
-            mtf_feature_names
+            final_mtf_features
         ),
         "market_feature_count": len(
-            market_feature_names
+            final_market_features
         ),
         "removed_high_missing_features": (
             removed_features
@@ -720,24 +723,20 @@ def build_unified_features(
     }
 
     return UnifiedFeatureResult(
-        data=base_data,
-        feature_names=feature_names,
-        base_feature_names=[
-            column
-            for column in base_feature_names
-            if column in feature_names
-        ],
-        market_feature_names=[
-            column
-            for column in market_feature_names
-            if column in feature_names
-        ],
-        multi_timeframe_feature_names=[
-            column
-            for column in mtf_feature_names
-            if column in feature_names
-        ],
-        rows=len(base_data),
+        data=combined,
+        feature_names=list(
+            feature_names
+        ),
+        base_feature_names=(
+            final_base_features
+        ),
+        market_feature_names=(
+            final_market_features
+        ),
+        multi_timeframe_feature_names=(
+            final_mtf_features
+        ),
+        rows=len(combined),
         warnings=warnings,
         metadata=metadata,
     )
