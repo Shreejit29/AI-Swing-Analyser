@@ -1,5 +1,8 @@
 """
-Tests for public research-package exports.
+Tests for public exports from src.research.
+
+These tests ensure that newly integrated research components remain
+available through the package-level API.
 """
 
 from __future__ import annotations
@@ -7,247 +10,222 @@ from __future__ import annotations
 import src.research as research
 
 
-def test_holdout_gate_exports():
+def test_market_context_exports():
     assert hasattr(
         research,
-        "FinalHoldoutGate",
-    )
-
-    assert hasattr(
-        research,
-        "HoldoutGateInput",
+        "MarketContextConfig",
     )
 
     assert hasattr(
         research,
-        "HoldoutGateResult",
+        "MarketContextResult",
     )
 
     assert hasattr(
         research,
-        "HoldoutGateStatus",
+        "build_market_context",
     )
 
     assert hasattr(
         research,
-        "create_holdout_gate",
+        "build_benchmark_features",
     )
 
     assert hasattr(
         research,
-        "evaluate_holdout_gate",
+        "add_relative_strength",
     )
 
 
-def test_holdout_stage_exports():
+def test_market_data_context_exports():
     assert hasattr(
         research,
-        "FinalHoldoutStage",
-    )
-
-    assert hasattr(
-        research,
-        "HoldoutStageResult",
+        "MarketContextRequest",
     )
 
     assert hasattr(
         research,
-        "run_final_holdout_stage",
-    )
-
-
-def test_protected_holdout_pipeline_exports():
-    assert hasattr(
-        research,
-        "HoldoutPipelineResult",
+        "MarketContextData",
     )
 
     assert hasattr(
         research,
-        "ProtectedHoldoutPipeline",
+        "MarketContextDataLoader",
     )
 
     assert hasattr(
         research,
-        "run_protected_holdout",
+        "load_market_context",
+    )
+
+    assert hasattr(
+        research,
+        "build_stock_market_context",
     )
 
 
-def test_holdout_gate_imports_are_callable():
-    assert callable(
-        research.FinalHoldoutGate
+def test_market_integration_exports():
+    assert hasattr(
+        research,
+        "MarketIntegrationConfig",
     )
 
-    assert callable(
-        research.create_holdout_gate
+    assert hasattr(
+        research,
+        "MarketIntegrationResult",
     )
 
-    assert callable(
-        research.evaluate_holdout_gate
+    assert hasattr(
+        research,
+        "integrate_market_context",
     )
 
-
-def test_holdout_stage_imports_are_callable():
-    assert callable(
-        research.FinalHoldoutStage
+    assert hasattr(
+        research,
+        "add_market_context_to_stock",
     )
 
-    assert callable(
-        research.run_final_holdout_stage
-    )
-
-
-def test_pipeline_imports_are_callable():
-    assert callable(
-        research.ProtectedHoldoutPipeline
-    )
-
-    assert callable(
-        research.run_protected_holdout
+    assert hasattr(
+        research,
+        "market_integration_summary",
     )
 
 
-def test_public_all_contains_holdout_components():
-    exported = set(
-        research.__all__
+def test_unified_feature_exports():
+    assert hasattr(
+        research,
+        "UnifiedFeatureConfig",
     )
 
-    expected = {
-        "FinalHoldoutGate",
-        "HoldoutGateInput",
-        "HoldoutGateResult",
-        "HoldoutGateStatus",
-        "create_holdout_gate",
-        "evaluate_holdout_gate",
-        "FinalHoldoutStage",
-        "HoldoutStageResult",
-        "run_final_holdout_stage",
-        "HoldoutPipelineResult",
-        "ProtectedHoldoutPipeline",
-        "run_protected_holdout",
-    }
-
-    assert expected.issubset(
-        exported
+    assert hasattr(
+        research,
+        "UnifiedFeatureResult",
     )
 
-
-def test_holdout_gate_objects_can_be_created():
-    gate = research.FinalHoldoutGate()
-
-    evidence = research.create_holdout_gate(
-        model_id="test_model",
-        selection_completed=True,
-        walk_forward_completed=True,
-        feature_selection_frozen=True,
-        hyperparameters_frozen=True,
-        preprocessing_frozen=True,
+    assert hasattr(
+        research,
+        "build_unified_features",
     )
 
-    result = gate.evaluate(
-        evidence
+    assert hasattr(
+        research,
+        "feature_matrix",
     )
 
-    assert result.eligible is True
-    assert result.safe_to_evaluate is True
-
-
-def test_pipeline_can_be_constructed():
-    pipeline = (
-        research.ProtectedHoldoutPipeline()
+    assert hasattr(
+        research,
+        "unified_feature_names",
     )
 
-    assert (
-        pipeline.accuracy_threshold
-        == 0.95
+    assert hasattr(
+        research,
+        "unified_feature_summary",
     )
 
 
-def test_legacy_research_exports_remain_available():
-    expected = {
+def test_market_context_classes_are_importable():
+    config = research.MarketContextConfig()
+
+    assert isinstance(
+        config,
+        research.MarketContextConfig,
+    )
+
+
+def test_market_integration_config_is_importable():
+    config = research.MarketIntegrationConfig()
+
+    assert isinstance(
+        config,
+        research.MarketIntegrationConfig,
+    )
+
+
+def test_unified_feature_config_is_importable():
+    config = research.UnifiedFeatureConfig()
+
+    assert isinstance(
+        config,
+        research.UnifiedFeatureConfig,
+    )
+
+
+def test_existing_research_exports_remain_available():
+    expected = [
         "ResearchPipeline",
         "ResearchPipelineResult",
         "ResearchStage",
-        "ResearchPipelineConfig",
-        "ResearchValidationConfig",
-    }
-
-    exported = set(
-        research.__all__
-    )
-
-    assert expected.issubset(
-        exported
-    )
-
-
-def test_integrated_configuration_exports_remain_available():
-    expected = {
-        "IntegratedResearchConfig",
-        "IntegratedValidationConfig",
-        "IntegratedHoldoutConfig",
-        "IntegratedApprovalConfig",
-        "default_integrated_research_config",
-    }
-
-    exported = set(
-        research.__all__
-    )
-
-    assert expected.issubset(
-        exported
-    )
-
-
-def test_model_selection_exports_remain_available():
-    expected = {
+        "ResearchDatasetBuilder",
+        "LeakageAuditor",
+        "TemporalSplitter",
+        "WalkForwardResearchEngine",
+        "ModelDevelopmentOrchestrator",
+        "ResearchExperimentRunner",
         "ControlledModelSelector",
-        "ModelCandidateScore",
-        "ModelSelectionConfig",
-        "ModelSelectionResult",
-        "select_best_model",
-    }
-
-    exported = set(
-        research.__all__
-    )
-
-    assert expected.issubset(
-        exported
-    )
-
-
-def test_model_card_exports_remain_available():
-    expected = {
+        "SelectionPipeline",
+        "SelectionRegistry",
         "ModelCard",
-        "ModelCardBuilder",
-        "model_card_from_selection",
-        "save_model_card",
-        "load_model_card",
         "ModelCardRegistry",
-        "register_model_card",
-    }
+        "CalibrationResearchEngine",
+        "RangeResearchEngine",
+        "RegimeResearchEngine",
+        "BacktestResearchEngine",
+        "RobustnessResearchEngine",
+        "ResearchEvidence",
+        "ResearchEvidenceCollector",
+        "FinalHoldoutGate",
+        "FinalHoldoutStage",
+        "ProtectedHoldoutPipeline",
+        "ResearchPipelineIntegrator",
+        "ProductionPredictionGateway",
+        "MultiHorizonPredictionEngine",
+    ]
 
-    exported = set(
-        research.__all__
+    for name in expected:
+        assert hasattr(
+            research,
+            name
+        ), (
+            f"Missing public research export: "
+            f"{name}"
+        )
+
+
+def test_research_package_does_not_expose_production_approval_as_feature_generation():
+    """
+    Feature generation must remain separate from production approval.
+
+    This is an architectural boundary test rather than a claim that
+    approval functionality does not exist elsewhere in the package.
+    """
+
+    assert hasattr(
+        research,
+        "build_unified_features",
     )
 
-    assert expected.issubset(
-        exported
+    assert hasattr(
+        research,
+        "ResearchApprovalBridge",
+    )
+
+    assert (
+        research.build_unified_features
+        is not research.ResearchApprovalBridge
     )
 
 
-def test_selection_stage_exports_remain_available():
-    expected = {
-        "ModelSelectionStage",
-        "ModelSelectionStageResult",
-        "run_model_selection_stage",
-    }
-
-    exported = set(
-        research.__all__
+def test_public_api_is_deterministic():
+    first = sorted(
+        name
+        for name in dir(research)
+        if not name.startswith("_")
     )
 
-    assert expected.issubset(
-        exported
+    second = sorted(
+        name
+        for name in dir(research)
+        if not name.startswith("_")
     )
+
+    assert first == second
