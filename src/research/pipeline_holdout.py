@@ -5,23 +5,23 @@ Execution boundary:
 
     Model Selection
           ↓
-    Frozen Development Model
+    Freeze Model / Features / Hyperparameters / Preprocessing
           ↓
     Final Holdout Gate
           ↓
     Final Holdout Evaluation
           ↓
     Holdout Evidence
+          ↓
+    Production Approval Engine
 
-This module does NOT perform:
-    - model selection
-    - feature selection
-    - hyperparameter tuning
-    - calibration
-    - threshold optimization
-    - production approval
-
-The final holdout remains an untouched evaluation set until this stage.
+This module does NOT:
+    - train a model
+    - select features
+    - tune hyperparameters
+    - fit calibration
+    - optimize thresholds
+    - approve production deployment
 """
 
 from __future__ import annotations
@@ -31,7 +31,13 @@ from typing import Any, Sequence
 
 import pandas as pd
 
-from .holdout_gate import HoldoutGateInput
+from .holdout_evaluation import HoldoutEvaluationResult
+from .holdout_gate import (
+    FinalHoldoutGate,
+    HoldoutGateInput,
+    HoldoutGateResult,
+    HoldoutGateStatus,
+)
 from .holdout_stage import (
     HoldoutStageResult,
     run_final_holdout_stage,
@@ -40,7 +46,7 @@ from .holdout_stage import (
 
 @dataclass(frozen=True)
 class HoldoutPipelineResult:
-    """Result returned by the protected holdout pipeline."""
+    """Result of the protected final holdout pipeline."""
 
     model_id: str
     stage: HoldoutStageResult
@@ -65,28 +71,37 @@ class HoldoutPipelineResult:
 
     @property
     def eligible(self) -> bool:
-        """Whether the holdout evaluation was permitted."""
+        """Whether the model was permitted to use the holdout."""
         return self.stage.eligible_for_evaluation
 
     @property
     def evaluated(self) -> bool:
-        """Whether the final holdout was actually evaluated."""
+        """Whether final holdout evaluation actually occurred."""
         return self.stage.evaluated
 
     @property
     def final_holdout_used(self) -> bool:
-        """Whether the holdout was consumed for final evaluation."""
+        """Whether the final holdout was consumed."""
         return self.stage.final_holdout_used
 
+    @property
+    def holdout_result(
+        self,
+    ) -> HoldoutEvaluationResult | None:
+        """Return the underlying holdout evaluation."""
+        return self.stage.evaluation
+
     def summary(self) -> dict[str, Any]:
-        """Return a compact pipeline summary."""
+        """Return a compact, serializable summary."""
 
         return {
             "model_id": self.model_id,
             "completed": self.completed,
             "eligible": self.eligible,
             "evaluated": self.evaluated,
-            "final_holdout_used": self.final_holdout_used,
+            "final_holdout_used": (
+                self.final_holdout_used
+            ),
             "accuracy": self.accuracy,
             "passed_accuracy_gate": (
                 self.passed_accuracy_gate
@@ -103,9 +118,10 @@ class HoldoutPipelineResult:
 
 class ProtectedHoldoutPipeline:
     """
-    Controlled wrapper around the final holdout stage.
+    Controlled wrapper around final holdout evaluation.
 
-    This class intentionally has no training methods.
+    The pipeline receives an already-frozen model and preprocessor.
+    It never fits either object.
     """
 
     def __init__(
@@ -118,8 +134,10 @@ class ProtectedHoldoutPipeline:
             )
 
         self.accuracy_threshold = (
-            accuracy_threshold
+            float(accuracy_threshold)
         )
+
+        self.gate = FinalHoldoutGate()
 
     @staticmethod
     def _validate_model_id(
@@ -148,53 +166,6 @@ class ProtectedHoldoutPipeline:
             )
 
     @staticmethod
-    def _validate_data(
-        development_data: pd.DataFrame,
-        holdout_data: pd.DataFrame,
-    ) -> None:
-        if not isinstance(
-            development_data,
-            pd.DataFrame,
-        ):
-            raise TypeError(
-                "development_data must be a pandas DataFrame."
-            )
-
-        if not isinstance(
-            holdout_data,
-            pd.DataFrame,
-        ):
-            raise TypeError(
-                "holdout_data must be a pandas DataFrame."
-            )
-
-        if development_data.empty:
-            raise ValueError(
-                "development_data cannot be empty."
-            )
-
-        if holdout_data.empty:
-            raise ValueError(
-                "holdout_data cannot be empty."
-            )
-
-        if not isinstance(
-            development_data.index,
-            pd.DatetimeIndex,
-        ):
-            raise TypeError(
-                "development_data must use a DatetimeIndex."
-            )
-
-        if not isinstance(
-            holdout_data.index,
-            pd.DatetimeIndex,
-        ):
-            raise TypeError(
-                "holdout_data must use a DatetimeIndex."
-            )
-
-    @staticmethod
     def _validate_model_identity(
         model_id: str,
         gate_input: HoldoutGateInput,
@@ -205,32 +176,251 @@ class ProtectedHoldoutPipeline:
             )
 
     @staticmethod
-    def _build_metadata(
-        model_id: str,
-        stage_result: HoldoutStageResult,
-    ) -> dict[str, Any]:
-        metadata = {
-            "stage": "protected_final_holdout",
-            "model_id": model_id,
-            "research_only": True,
-            "production_approved": False,
-            "holdout_used_for_selection": False,
-            "holdout_used_for_feature_selection": False,
-            "holdout_used_for_hyperparameter_tuning": False,
-            "holdout_used_for_calibration": False,
-            "holdout_used_for_threshold_optimization": False,
-            "model_fitted_on_holdout": False,
-            "preprocessor_fitted_on_holdout": False,
-            "holdout_gate_status": (
-                stage_result.gate.status.value
+    def _validate_data(
+        development_data: pd.DataFrame,
+        holdout_data: pd.DataFrame,
+    ) -> None:
+        for data, name in (
+            (
+                development_data,
+                "development_data",
             ),
-        }
+            (
+                holdout_data,
+                "holdout_data",
+            ),
+        ):
+            if not isinstance(
+                data,
+                pd.DataFrame,
+            ):
+                raise TypeError(
+                    f"{name} must be a pandas DataFrame."
+                )
 
-        metadata.update(
-            stage_result.metadata
+            if data.empty:
+                raise ValueError(
+                    f"{name} cannot be empty."
+                )
+
+            if not isinstance(
+                data.index,
+                pd.DatetimeIndex,
+            ):
+                raise TypeError(
+                    f"{name} must use a DatetimeIndex."
+                )
+
+            if data.index.has_duplicates:
+                raise ValueError(
+                    f"{name} contains duplicate timestamps."
+                )
+
+            if not data.index.is_monotonic_increasing:
+                raise ValueError(
+                    f"{name} must be chronologically sorted."
+                )
+
+        if (
+            development_data.index.max()
+            >= holdout_data.index.min()
+        ):
+            raise ValueError(
+                "Development and final holdout periods overlap."
+            )
+
+    @staticmethod
+    def _validate_features(
+        development_data: pd.DataFrame,
+        holdout_data: pd.DataFrame,
+        feature_columns: Sequence[str],
+    ) -> None:
+        if not feature_columns:
+            raise ValueError(
+                "feature_columns cannot be empty."
+            )
+
+        feature_columns = list(
+            feature_columns
         )
 
-        return metadata
+        if len(feature_columns) != len(
+            set(feature_columns)
+        ):
+            raise ValueError(
+                "feature_columns contains duplicates."
+            )
+
+        missing_development = [
+            column
+            for column in feature_columns
+            if column not in development_data.columns
+        ]
+
+        if missing_development:
+            raise ValueError(
+                "Features missing from development data: "
+                f"{missing_development}"
+            )
+
+        missing_holdout = [
+            column
+            for column in feature_columns
+            if column not in holdout_data.columns
+        ]
+
+        if missing_holdout:
+            raise ValueError(
+                "Features missing from holdout data: "
+                f"{missing_holdout}"
+            )
+
+    @staticmethod
+    def _validate_target(
+        development_data: pd.DataFrame,
+        holdout_data: pd.DataFrame,
+        target_column: str,
+    ) -> None:
+        if not isinstance(
+            target_column,
+            str,
+        ):
+            raise TypeError(
+                "target_column must be a string."
+            )
+
+        if not target_column.strip():
+            raise ValueError(
+                "target_column cannot be empty."
+            )
+
+        if target_column not in development_data.columns:
+            raise ValueError(
+                "Target missing from development data: "
+                f"{target_column}"
+            )
+
+        if target_column not in holdout_data.columns:
+            raise ValueError(
+                "Target missing from holdout data: "
+                f"{target_column}"
+            )
+
+    @staticmethod
+    def _validate_model(
+        model: Any,
+    ) -> None:
+        if model is None:
+            raise ValueError(
+                "Frozen model cannot be None."
+            )
+
+        if not hasattr(
+            model,
+            "predict",
+        ):
+            raise TypeError(
+                "Frozen model must provide predict()."
+            )
+
+    @staticmethod
+    def _validate_preprocessor(
+        preprocessor: Any,
+    ) -> None:
+        if preprocessor is None:
+            raise ValueError(
+                "Frozen preprocessor cannot be None."
+            )
+
+        if not hasattr(
+            preprocessor,
+            "transform",
+        ):
+            raise TypeError(
+                "Frozen preprocessor must provide transform()."
+            )
+
+    @staticmethod
+    def _validate_gate_metadata(
+        gate_input: HoldoutGateInput,
+    ) -> None:
+        metadata = gate_input.metadata or {}
+
+        forbidden_flags = {
+            "holdout_used_for_selection",
+            "holdout_used_for_feature_selection",
+            "holdout_used_for_hyperparameter_tuning",
+            "holdout_used_for_calibration",
+            "holdout_used_for_threshold_optimization",
+        }
+
+        violations = [
+            key
+            for key in forbidden_flags
+            if bool(metadata.get(key, False))
+        ]
+
+        if violations:
+            raise ValueError(
+                "Holdout contamination detected: "
+                f"{violations}"
+            )
+
+    @staticmethod
+    def _blocked_result(
+        model_id: str,
+        gate_result: HoldoutGateResult,
+        *,
+        errors: tuple[str, ...] = (),
+    ) -> HoldoutPipelineResult:
+        """
+        Build a deterministic fail-closed result.
+
+        No holdout evaluation has occurred.
+        """
+
+        stage = HoldoutStageResult(
+            model_id=model_id,
+            gate=gate_result,
+            evaluation=None,
+            successful=False,
+            final_holdout_used=False,
+            holdout_accuracy=None,
+            passed_accuracy_gate=False,
+            warnings=tuple(
+                gate_result.warnings
+            ),
+            metadata={
+                "stage": "protected_final_holdout",
+                "evaluation_started": False,
+                "final_holdout_used": False,
+                "research_only": True,
+                "production_approved": False,
+            },
+        )
+
+        return HoldoutPipelineResult(
+            model_id=model_id,
+            stage=stage,
+            completed=False,
+            production_approved=False,
+            accuracy=None,
+            passed_accuracy_gate=False,
+            errors=errors,
+            warnings=tuple(
+                gate_result.warnings
+            ),
+            metadata={
+                "stage": "protected_final_holdout",
+                "evaluation_started": False,
+                "final_holdout_used": False,
+                "research_only": True,
+                "production_approved": False,
+                "holdout_gate_status": (
+                    gate_result.status.value
+                ),
+            },
+        )
 
     def run(
         self,
@@ -245,9 +435,9 @@ class ProtectedHoldoutPipeline:
         gate_input: HoldoutGateInput,
     ) -> HoldoutPipelineResult:
         """
-        Execute the protected final holdout evaluation.
+        Run the protected final holdout evaluation.
 
-        No fitting occurs in this method.
+        No model or preprocessing fitting occurs here.
         """
 
         self._validate_model_id(
@@ -263,10 +453,44 @@ class ProtectedHoldoutPipeline:
             gate_input,
         )
 
+        self._validate_model(
+            model
+        )
+
+        self._validate_preprocessor(
+            preprocessor
+        )
+
         self._validate_data(
             development_data,
             holdout_data,
         )
+
+        self._validate_features(
+            development_data,
+            holdout_data,
+            feature_columns,
+        )
+
+        self._validate_target(
+            development_data,
+            holdout_data,
+            target_column,
+        )
+
+        self._validate_gate_metadata(
+            gate_input
+        )
+
+        gate_result = self.gate.evaluate(
+            gate_input
+        )
+
+        if not gate_result.eligible:
+            return self._blocked_result(
+                model_id,
+                gate_result,
+            )
 
         try:
             stage_result = (
@@ -286,131 +510,80 @@ class ProtectedHoldoutPipeline:
             )
 
         except Exception as exc:
-            return HoldoutPipelineResult(
-                model_id=model_id,
-                stage=HoldoutStageResult(
-                    model_id=model_id,
-                    gate=(
-                        # The stage should normally construct
-                        # this itself. This branch only records
-                        # unexpected execution failure.
-                        gate_input_to_blocked_result(
-                            gate_input
-                        )
-                    ),
-                    evaluation=None,
-                    successful=False,
-                    final_holdout_used=False,
-                    warnings=(
-                        str(exc),
-                    ),
-                    metadata={
-                        "stage": (
-                            "protected_final_holdout"
-                        ),
-                        "research_only": True,
-                        "production_approved": False,
-                    },
+            failure_gate = HoldoutGateResult(
+                status=HoldoutGateStatus.BLOCKED,
+                eligible=False,
+                safe_to_evaluate=False,
+                failures=(
+                    "Final holdout pipeline execution failed.",
                 ),
-                completed=False,
-                production_approved=False,
-                accuracy=None,
-                passed_accuracy_gate=False,
-                errors=(str(exc),),
-                warnings=(),
+                warnings=(
+                    str(exc),
+                ),
                 metadata={
-                    "stage": (
-                        "protected_final_holdout"
-                    ),
-                    "evaluation_started": False,
+                    "final_holdout_protected": True,
                     "final_holdout_used": False,
                     "research_only": True,
                     "production_approved": False,
                 },
             )
 
+            return self._blocked_result(
+                model_id,
+                failure_gate,
+                errors=(
+                    str(exc),
+                ),
+            )
+
         accuracy = (
             stage_result.holdout_accuracy
         )
-
-        warnings = tuple(
-            stage_result.warnings
-        )
-
-        errors: tuple[str, ...] = ()
 
         completed = (
             stage_result.successful
             and stage_result.evaluated
         )
 
-        # This pipeline never grants production approval.
-        production_approved = False
+        metadata = {
+            "stage": "protected_final_holdout",
+            "model_id": model_id,
+            "research_only": True,
+            "production_approved": False,
+            "holdout_used_for_selection": False,
+            "holdout_used_for_feature_selection": False,
+            "holdout_used_for_hyperparameter_tuning": False,
+            "holdout_used_for_calibration": False,
+            "holdout_used_for_threshold_optimization": False,
+            "model_fitted_on_holdout": False,
+            "preprocessor_fitted_on_holdout": False,
+            "holdout_gate_status": (
+                stage_result.gate.status.value
+            ),
+            "final_holdout_used": (
+                stage_result.final_holdout_used
+            ),
+        }
 
-        metadata = self._build_metadata(
-            model_id,
-            stage_result,
+        metadata.update(
+            stage_result.metadata
         )
 
         return HoldoutPipelineResult(
             model_id=model_id,
             stage=stage_result,
             completed=completed,
-            production_approved=(
-                production_approved
-            ),
+            production_approved=False,
             accuracy=accuracy,
             passed_accuracy_gate=(
                 stage_result.passed_accuracy_gate
             ),
-            errors=errors,
-            warnings=warnings,
+            errors=(),
+            warnings=tuple(
+                stage_result.warnings
+            ),
             metadata=metadata,
         )
-
-
-def gate_input_to_blocked_result(
-    gate_input: HoldoutGateInput,
-):
-    """
-    Create a blocked gate result for unexpected pipeline failures.
-
-    This helper keeps the failure path fail-closed.
-    """
-
-    from .holdout_gate import (
-        FinalHoldoutGate,
-    )
-
-    gate = FinalHoldoutGate()
-
-    try:
-        result = gate.evaluate(
-            gate_input
-        )
-    except Exception:
-        # Import locally to avoid changing normal gate behavior.
-        from .holdout_gate import (
-            HoldoutGateResult,
-            HoldoutGateStatus,
-        )
-
-        return HoldoutGateResult(
-            status=HoldoutGateStatus.BLOCKED,
-            eligible=False,
-            safe_to_evaluate=False,
-            failures=(
-                "Unexpected failure occurred before final "
-                "holdout evaluation.",
-            ),
-            warnings=(),
-            metadata={
-                "research_only": True,
-                "final_holdout_protected": True,
-            },
-        )
-
-    return result
 
 
 def run_protected_holdout(
@@ -425,10 +598,10 @@ def run_protected_holdout(
     gate_input: HoldoutGateInput,
     accuracy_threshold: float = 0.95,
 ) -> HoldoutPipelineResult:
-    """Convenience API for protected holdout evaluation."""
+    """Convenience API for protected final holdout evaluation."""
 
     pipeline = ProtectedHoldoutPipeline(
-        accuracy_threshold=accuracy_threshold,
+        accuracy_threshold=accuracy_threshold
     )
 
     return pipeline.run(
