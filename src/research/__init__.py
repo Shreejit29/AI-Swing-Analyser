@@ -2,7 +2,7 @@
 AI Swing Analyser — Research package.
 
 Public exports for the research, validation, model-selection,
-integration, and approval framework.
+model documentation, integration, and approval framework.
 """
 
 from .config import (
@@ -37,6 +37,33 @@ from .model_selection import (
     ModelSelectionConfig,
     ModelSelectionResult,
     select_best_model,
+)
+
+from .selection_pipeline import (
+    SelectionCandidate,
+    SelectionPipeline,
+    SelectionPipelineResult,
+    run_model_selection,
+)
+
+from .selection_registry import (
+    SelectionRecord,
+    SelectionRegistry,
+    register_selection,
+)
+
+from .model_card import (
+    ModelCard,
+    ModelCardBuilder,
+    load_model_card,
+    model_card_from_selection,
+    model_card_summary,
+    save_model_card,
+)
+
+from .model_card_registry import (
+    ModelCardRegistry,
+    register_model_card,
 )
 
 from .pipeline import (
@@ -77,7 +104,30 @@ __all__ = [
     "ModelSelectionResult",
     "select_best_model",
 
-    # Research pipeline
+    # Selection pipeline
+    "SelectionCandidate",
+    "SelectionPipeline",
+    "SelectionPipelineResult",
+    "run_model_selection",
+
+    # Selection registry
+    "SelectionRecord",
+    "SelectionRegistry",
+    "register_selection",
+
+    # Model cards
+    "ModelCard",
+    "ModelCardBuilder",
+    "load_model_card",
+    "model_card_from_selection",
+    "model_card_summary",
+    "save_model_card",
+
+    # Model-card registry
+    "ModelCardRegistry",
+    "register_model_card",
+
+    # Main research pipeline
     "ResearchPipeline",
     "ResearchPipelineResult",
     "ResearchStage",
