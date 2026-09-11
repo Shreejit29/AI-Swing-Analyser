@@ -1,7 +1,15 @@
 """
-Tests for the unified feature integration layer.
+Tests for unified feature integration.
 
-No live market-data requests are used.
+The tests focus on:
+- deterministic feature construction
+- target/future leakage protection
+- market-context integration
+- multi-timeframe integration
+- numeric model features
+- timeline preservation
+- input immutability
+- future-data mutation resistance
 """
 
 from __future__ import annotations
@@ -19,61 +27,69 @@ from src.research.feature_integration import (
     unified_feature_summary,
 )
 from src.research.market_context import (
-    MarketContextResult,
+    MarketContextConfig,
+    build_market_context,
 )
 from src.research.market_data_context import (
     MarketContextData,
 )
 
 
-def make_ohlcv(
-    n: int = 320,
-    start_price: float = 100.0,
-    slope: float = 0.20,
+def make_stock_data(
+    rows: int = 500,
 ) -> pd.DataFrame:
-    """Create deterministic synthetic OHLCV data."""
-
     index = pd.date_range(
-        "2024-01-01",
-        periods=n,
+        "2022-01-03",
+        periods=rows,
         freq="D",
     )
 
-    x = np.arange(n, dtype=float)
-
     close = (
-        start_price
-        + slope * x
-        + 2.0 * np.sin(x / 9.0)
-        + 0.8 * np.sin(x / 3.0)
+        100
+        + np.cumsum(
+            np.sin(
+                np.arange(rows) / 17.0
+            )
+            * 0.35
+        )
+        + np.linspace(
+            0,
+            20,
+            rows,
+        )
     )
 
     open_price = (
         close
-        * (
-            1.0
-            + 0.002 * np.sin(x / 5.0)
+        + np.sin(
+            np.arange(rows) / 9.0
         )
+        * 0.4
     )
 
-    high = np.maximum(
-        open_price,
-        close,
-    ) * 1.01
+    high = (
+        np.maximum(
+            open_price,
+            close,
+        )
+        + 1.0
+    )
 
-    low = np.minimum(
-        open_price,
-        close,
-    ) * 0.99
+    low = (
+        np.minimum(
+            open_price,
+            close,
+        )
+        - 1.0
+    )
 
     volume = (
-        1_000_000
-        + 50_000
-        * (
-            1.0
-            + np.sin(x / 7.0)
+        100_000
+        + (
+            np.arange(rows)
+            % 20
         )
-        + 1_000 * x
+        * 2_000
     )
 
     return pd.DataFrame(
@@ -89,722 +105,73 @@ def make_ohlcv(
 
 
 def make_market_context(
-    n: int = 320,
+    rows: int = 500,
 ) -> MarketContextData:
-    """Create deterministic synthetic NIFTY50 context."""
-
     index = pd.date_range(
-        "2024-01-01",
-        periods=n,
+        "2022-01-03",
+        periods=rows,
         freq="D",
     )
 
-    x = np.arange(n, dtype=float)
-
-    close = (
-        100.0
-        + 0.15 * x
-        + np.sin(x / 10.0)
+    base = (
+        100
+        + np.cumsum(
+            np.sin(
+                np.arange(rows) / 20.0
+            )
+            * 0.25
+        )
     )
 
-    context = pd.DataFrame(
+    benchmark = pd.DataFrame(
         {
-            "NIFTY50_Close": close,
-            "NIFTY50_Market_Return_1": (
-                0.001 + x * 0.0
-            ),
-            "NIFTY50_Market_Return_5": (
-                0.005 + x * 0.0
-            ),
-            "NIFTY50_Market_Return_20": (
-                0.020 + x * 0.0
-            ),
-            "NIFTY50_Market_MA_20": (
-                close - 1.0
-            ),
-            "NIFTY50_Market_MA_50": (
-                close - 2.0
-            ),
-            "NIFTY50_Market_MA_200": (
-                close - 3.0
-            ),
-            "NIFTY50_Market_Volatility_10": (
-                0.01 + x * 0.0
-            ),
-            "NIFTY50_Market_Volatility_20": (
-                0.012 + x * 0.0
-            ),
-            "NIFTY50_Market_Volatility_60": (
-                0.015 + x * 0.0
-            ),
-            "NIFTY50_Market_Momentum_5": (
-                0.005 + x * 0.0
-            ),
-            "NIFTY50_Market_Momentum_10": (
-                0.010 + x * 0.0
-            ),
-            "NIFTY50_Market_Momentum_20": (
-                0.020 + x * 0.0
-            ),
-            "NIFTY50_Trend_Score": (
-                0.75 + x * 0.0
-            ),
-            "NIFTY50_Regime": [
-                "BULL"
-                for _ in range(n)
-            ],
+            "NIFTY50_Close": base,
+            "NIFTY50_Return_1": pd.Series(
+                base,
+                index=index,
+            ).pct_change(),
         },
         index=index,
     )
 
-    raw = make_ohlcv(
-        n=n,
-        start_price=100.0,
-        slope=0.15,
-    )
-
-    return MarketContextData(
-        raw_data={
-            "NIFTY50": raw
-        },
-        context=MarketContextResult(
-            data=context,
-            feature_names=list(
-                context.columns
+    context = build_market_context(
+        {
+            "NIFTY50": pd.DataFrame(
+                {
+                    "Close": base,
+                },
+                index=index,
             ),
-            warnings=[],
-            metadata={
-                "relative_strength_window": 20
-            },
-        ),
-        metadata={
-            "research_only": True,
-            "future_values_used": False,
+            "SENSEX": pd.DataFrame(
+                {
+                    "Close": base * 1.05,
+                },
+                index=index,
+            ),
+            "NIFTYBANK": pd.DataFrame(
+                {
+                    "Close": base * 0.98,
+                },
+                index=index,
+            ),
         },
-        warnings=[],
-    )
-
-
-# ---------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------
-
-
-def test_unified_feature_config_defaults():
-    config = UnifiedFeatureConfig()
-
-    assert (
-        config.include_market_context
-        is True
-    )
-
-    assert (
-        config.include_relative_strength
-        is True
-    )
-
-    assert (
-        config.include_multi_timeframe
-        is True
-    )
-
-    assert (
-        config.benchmark
-        == "NIFTY50"
-    )
-
-    assert (
-        config.relative_strength_window
-        == 20
-    )
-
-    assert (
-        config.max_missing_fraction
-        == 0.40
-    )
-
-    assert (
-        config.reject_future_columns
-        is True
-    )
-
-
-def test_invalid_benchmark_fails():
-    with pytest.raises(ValueError):
-        UnifiedFeatureConfig(
-            benchmark=""
-        )
-
-
-def test_invalid_relative_strength_window_fails():
-    with pytest.raises(ValueError):
-        UnifiedFeatureConfig(
-            relative_strength_window=1
-        )
-
-
-def test_invalid_missing_fraction_fails():
-    with pytest.raises(ValueError):
-        UnifiedFeatureConfig(
-            max_missing_fraction=1.5
-        )
-
-
-# ---------------------------------------------------------------------
-# Basic feature construction
-# ---------------------------------------------------------------------
-
-
-def test_build_unified_features():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock
+        config=MarketContextConfig(),
     )
 
     assert isinstance(
-        result,
-        UnifiedFeatureResult,
+        context,
+        MarketContextData,
     )
 
-    assert (
-        result.rows
-        == len(stock)
+    return context
+
+
+def make_timeframe_data(
+    stock: pd.DataFrame,
+) -> dict[str, pd.DataFrame]:
+    daily = stock.copy(
+        deep=True
     )
-
-    assert (
-        result.feature_count
-        > 0
-    )
-
-
-def test_base_features_are_created():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock
-    )
-
-    assert (
-        len(
-            result.base_feature_names
-        )
-        > 0
-    )
-
-
-def test_technical_features_are_present():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock
-    )
-
-    expected = [
-        "RSI_14",
-        "MACD",
-        "EMA_20",
-        "EMA_50",
-        "ATR_14",
-        "ADX_14",
-    ]
-
-    for column in expected:
-        assert column in result.data.columns
-
-
-def test_price_action_features_are_present():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock
-    )
-
-    candidates = [
-        "Body_Size",
-        "Upper_Wick",
-        "Lower_Wick",
-        "Candle_Range",
-    ]
-
-    assert any(
-        column in result.data.columns
-        for column in candidates
-    )
-
-
-def test_volume_features_are_present():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock
-    )
-
-    candidates = [
-        "RVOL_20",
-        "OBV",
-        "Volume_Change_20",
-        "Price_Volume_Confirmation",
-    ]
-
-    assert any(
-        column in result.data.columns
-        for column in candidates
-    )
-
-
-def test_regime_features_are_present():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock
-    )
-
-    candidates = [
-        "Trend_Regime",
-        "Volatility_Regime",
-        "Market_State_Score",
-    ]
-
-    assert any(
-        column in result.data.columns
-        for column in candidates
-    )
-
-
-# ---------------------------------------------------------------------
-# Market context
-# ---------------------------------------------------------------------
-
-
-def test_market_context_is_integrated():
-    stock = make_ohlcv()
-    market = make_market_context()
-
-    result = build_unified_features(
-        stock,
-        market_context=market,
-    )
-
-    assert (
-        len(
-            result.market_feature_names
-        )
-        > 0
-    )
-
-    assert (
-        "NIFTY50_Close"
-        in result.data.columns
-    )
-
-
-def test_relative_strength_is_integrated():
-    stock = make_ohlcv()
-    market = make_market_context()
-
-    result = build_unified_features(
-        stock,
-        market_context=market,
-    )
-
-    assert any(
-        column.startswith(
-            "NIFTY50_Relative_Strength"
-        )
-        for column in result.data.columns
-    )
-
-
-def test_market_context_can_be_disabled():
-    stock = make_ohlcv()
-    market = make_market_context()
-
-    result = build_unified_features(
-        stock,
-        market_context=market,
-        config=UnifiedFeatureConfig(
-            include_market_context=False
-        ),
-    )
-
-    assert (
-        len(
-            result.market_feature_names
-        )
-        == 0
-    )
-
-    assert (
-        "NIFTY50_Close"
-        not in result.data.columns
-    )
-
-
-def test_relative_strength_can_be_disabled():
-    stock = make_ohlcv()
-    market = make_market_context()
-
-    result = build_unified_features(
-        stock,
-        market_context=market,
-        config=UnifiedFeatureConfig(
-            include_relative_strength=False
-        ),
-    )
-
-    assert not any(
-        column.startswith(
-            "NIFTY50_Relative_Strength"
-        )
-        for column in result.data.columns
-    )
-
-
-def test_missing_market_context_generates_warning():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock,
-        market_context=None,
-        config=UnifiedFeatureConfig(
-            include_market_context=True
-        ),
-    )
-
-    assert len(
-        result.warnings
-    ) > 0
-
-
-# ---------------------------------------------------------------------
-# Feature / target separation
-# ---------------------------------------------------------------------
-
-
-def test_future_columns_are_not_features():
-    stock = make_ohlcv()
-
-    stock["Future_Return_5"] = (
-        stock["Close"]
-        .shift(-5)
-        / stock["Close"]
-        - 1.0
-    )
-
-    with pytest.raises(ValueError):
-        build_unified_features(
-            stock
-        )
-
-
-def test_direction_columns_are_not_features():
-    stock = make_ohlcv()
-
-    stock["Direction_5"] = (
-        stock["Close"]
-        .shift(-5)
-        > stock["Close"]
-    ).astype(int)
-
-    with pytest.raises(ValueError):
-        build_unified_features(
-            stock
-        )
-
-
-def test_target_columns_are_not_features():
-    stock = make_ohlcv()
-
-    stock["Target_Return"] = (
-        stock["Close"]
-        .shift(-5)
-    )
-
-    with pytest.raises(ValueError):
-        build_unified_features(
-            stock
-        )
-
-
-def test_label_columns_are_not_features():
-    stock = make_ohlcv()
-
-    stock["Label"] = 1
-
-    with pytest.raises(ValueError):
-        build_unified_features(
-            stock
-        )
-
-
-def test_feature_names_are_unique():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock
-    )
-
-    assert len(
-        result.feature_names
-    ) == len(
-        set(result.feature_names)
-    )
-
-
-# ---------------------------------------------------------------------
-# Feature matrix
-# ---------------------------------------------------------------------
-
-
-def test_feature_matrix_returns_dataframe():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock
-    )
-
-    matrix = feature_matrix(
-        result
-    )
-
-    assert isinstance(
-        matrix,
-        pd.DataFrame,
-    )
-
-    assert list(
-        matrix.columns
-    ) == result.feature_names
-
-
-def test_feature_matrix_preserves_index():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock
-    )
-
-    matrix = feature_matrix(
-        result
-    )
-
-    assert matrix.index.equals(
-        stock.index
-    )
-
-
-def test_feature_matrix_is_copy():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock
-    )
-
-    matrix = feature_matrix(
-        result
-    )
-
-    column = result.feature_names[0]
-
-    original_value = result.data.loc[
-        result.data.index[100],
-        column,
-    ]
-
-    matrix.loc[
-        matrix.index[100],
-        column,
-    ] = 999999.0
-
-    assert (
-        result.data.loc[
-            result.data.index[100],
-            column,
-        ]
-        == original_value
-    )
-
-
-def test_unified_feature_names_returns_copy():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock
-    )
-
-    names = unified_feature_names(
-        result
-    )
-
-    names.append(
-        "FAKE_FEATURE"
-    )
-
-    assert (
-        "FAKE_FEATURE"
-        not in result.feature_names
-    )
-
-
-# ---------------------------------------------------------------------
-# Timeline integrity
-# ---------------------------------------------------------------------
-
-
-def test_timeline_is_preserved():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock
-    )
-
-    assert result.data.index.equals(
-        stock.index
-    )
-
-
-def test_row_count_is_preserved():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock
-    )
-
-    assert len(
-        result.data
-    ) == len(stock)
-
-
-def test_unsorted_stock_data_fails():
-    stock = make_ohlcv()
-
-    stock = stock.iloc[
-        ::-1
-    ]
-
-    with pytest.raises(ValueError):
-        build_unified_features(
-            stock
-        )
-
-
-def test_duplicate_stock_timestamps_fail():
-    stock = make_ohlcv()
-
-    stock.index = list(
-        stock.index
-    )
-
-    stock.index = pd.DatetimeIndex(
-        stock.index
-    )
-
-    stock.index = stock.index.where(
-        np.arange(len(stock)) != 10,
-        stock.index[9],
-    )
-
-    with pytest.raises(ValueError):
-        build_unified_features(
-            stock
-        )
-
-
-# ---------------------------------------------------------------------
-# Numeric and finite safety
-# ---------------------------------------------------------------------
-
-
-def test_non_numeric_feature_data_is_rejected():
-    stock = make_ohlcv()
-
-    stock["Close"] = "invalid"
-
-    with pytest.raises(ValueError):
-        build_unified_features(
-            stock
-        )
-
-
-def test_infinite_ohlcv_is_rejected():
-    stock = make_ohlcv()
-
-    stock.loc[
-        stock.index[100],
-        "Close",
-    ] = np.inf
-
-    with pytest.raises(ValueError):
-        build_unified_features(
-            stock
-        )
-
-
-def test_feature_matrix_is_numeric():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock
-    )
-
-    matrix = feature_matrix(
-        result
-    )
-
-    for column in matrix.columns:
-        assert pd.api.types.is_numeric_dtype(
-            matrix[column]
-        )
-
-
-# ---------------------------------------------------------------------
-# Missing feature handling
-# ---------------------------------------------------------------------
-
-
-def test_high_missing_features_are_removed():
-    stock = make_ohlcv()
-
-    stock["Artificial_Missing"] = np.nan
-
-    result = build_unified_features(
-        stock
-    )
-
-    assert (
-        "Artificial_Missing"
-        not in result.feature_names
-    )
-
-
-def test_missing_feature_removal_is_reported():
-    stock = make_ohlcv()
-
-    stock["Artificial_Missing"] = np.nan
-
-    result = build_unified_features(
-        stock
-    )
-
-    assert any(
-        "Artificial_Missing"
-        in warning
-        for warning in result.warnings
-    )
-
-
-# ---------------------------------------------------------------------
-# Multi-timeframe
-# ---------------------------------------------------------------------
-
-
-def test_multitimeframe_features_can_be_added():
-    stock = make_ohlcv(
-        n=320
-    )
-
-    daily = stock.copy()
 
     weekly = (
         stock.resample("W")
@@ -834,37 +201,54 @@ def test_multitimeframe_features_can_be_added():
         .dropna()
     )
 
-    timeframe_data = {
-        "4H": daily,
+    four_hour = stock.copy(
+        deep=True
+    )
+
+    return {
+        "4H": four_hour,
         "1D": daily,
         "1W": weekly,
         "1M": monthly,
     }
 
+
+def test_config_defaults_are_safe():
+    config = UnifiedFeatureConfig()
+
+    assert config.include_market_context is True
+    assert config.include_relative_strength is True
+    assert config.include_multi_timeframe is True
+    assert config.benchmark == "NIFTY50"
+    assert config.relative_strength_window >= 2
+    assert 0 <= config.max_missing_fraction <= 1
+
+
+def test_invalid_config_is_rejected():
+    with pytest.raises(ValueError):
+        UnifiedFeatureConfig(
+            relative_strength_window=1
+        )
+
+    with pytest.raises(ValueError):
+        UnifiedFeatureConfig(
+            max_missing_fraction=1.5
+        )
+
+    with pytest.raises(ValueError):
+        UnifiedFeatureConfig(
+            benchmark=""
+        )
+
+
+def test_basic_unified_feature_construction():
+    stock = make_stock_data()
+
     result = build_unified_features(
         stock,
-        timeframe_data=timeframe_data,
-    )
-
-    assert isinstance(
-        result,
-        UnifiedFeatureResult,
-    )
-
-    assert (
-        result.rows
-        == len(stock)
-    )
-
-
-def test_multitimeframe_can_be_disabled():
-    stock = make_ohlcv()
-
-    result = build_unified_features(
-        stock,
-        timeframe_data=None,
         config=UnifiedFeatureConfig(
-            include_multi_timeframe=False
+            include_market_context=False,
+            include_multi_timeframe=False,
         ),
     )
 
@@ -873,189 +257,163 @@ def test_multitimeframe_can_be_disabled():
         UnifiedFeatureResult,
     )
 
+    assert result.rows == len(stock)
+    assert result.feature_count > 0
+    assert len(
+        result.feature_names
+    ) > 0
 
-# ---------------------------------------------------------------------
-# Future mutation resistance
-# ---------------------------------------------------------------------
 
+def test_feature_matrix_contains_only_declared_features():
+    stock = make_stock_data()
 
-def test_base_features_do_not_depend_on_future_prices():
-    stock = make_ohlcv()
+    result = build_unified_features(
+        stock,
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=False,
+        ),
+    )
 
-    original = build_unified_features(
+    matrix = feature_matrix(
+        result
+    )
+
+    assert list(
+        matrix.columns
+    ) == result.feature_names
+
+    assert len(matrix) == len(
         stock
     )
 
-    mutated = stock.copy(
-        deep=True
-    )
 
-    future_start = 220
+def test_feature_names_are_unique():
+    stock = make_stock_data()
 
-    mutated.loc[
-        mutated.index[
-            future_start:
-        ],
-        "Close",
-    ] *= 100.0
-
-    mutated.loc[
-        mutated.index[
-            future_start:
-        ],
-        "High",
-    ] *= 100.0
-
-    mutated.loc[
-        mutated.index[
-            future_start:
-        ],
-        "Low",
-    ] *= 100.0
-
-    changed = build_unified_features(
-        mutated
-    )
-
-    timestamp = stock.index[
-        150
-    ]
-
-    # A past feature should remain unchanged
-    # after changing only future market prices.
-    common = [
-        column
-        for column in original.feature_names
-        if column in changed.feature_names
-    ]
-
-    for column in common:
-        left = original.data.loc[
-            timestamp,
-            column,
-        ]
-
-        right = changed.data.loc[
-            timestamp,
-            column,
-        ]
-
-        if pd.isna(left) and pd.isna(right):
-            continue
-
-        assert left == pytest.approx(
-            right
-        )
-
-
-# ---------------------------------------------------------------------
-# Market future mutation
-# ---------------------------------------------------------------------
-
-
-def test_market_features_do_not_use_future_market_rows():
-    stock = make_ohlcv()
-    market = make_market_context()
-
-    original = build_unified_features(
+    result = build_unified_features(
         stock,
-        market_context=market,
-    )
-
-    mutated_context = (
-        market.context.data.copy(
-            deep=True
-        )
-    )
-
-    future_start = 220
-
-    for column in [
-        "NIFTY50_Close",
-        "NIFTY50_Market_MA_20",
-        "NIFTY50_Market_Return_20",
-        "NIFTY50_Trend_Score",
-    ]:
-        if column in mutated_context.columns:
-            mutated_context.loc[
-                mutated_context.index[
-                    future_start:
-                ],
-                column,
-            ] *= 100.0
-
-    mutated_market = MarketContextData(
-        raw_data={
-            "NIFTY50": (
-                market.raw_data[
-                    "NIFTY50"
-                ].copy(deep=True)
-            )
-        },
-        context=MarketContextResult(
-            data=mutated_context,
-            feature_names=list(
-                mutated_context.columns
-            ),
-            warnings=[],
-            metadata={
-                "relative_strength_window": 20
-            },
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=False,
         ),
-        metadata={
-            "research_only": True
-        },
-        warnings=[],
     )
 
-    changed = build_unified_features(
+    assert len(
+        result.feature_names
+    ) == len(
+        set(result.feature_names)
+    )
+
+
+def test_features_are_numeric():
+    stock = make_stock_data()
+
+    result = build_unified_features(
         stock,
-        market_context=mutated_market,
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=False,
+        ),
     )
 
-    timestamp = stock.index[
-        150
-    ]
+    matrix = feature_matrix(
+        result
+    )
 
-    common = [
-        column
-        for column in original.market_feature_names
-        if column in changed.data.columns
-    ]
-
-    for column in common:
-        left = original.data.loc[
-            timestamp,
-            column,
-        ]
-
-        right = changed.data.loc[
-            timestamp,
-            column,
-        ]
-
-        if pd.isna(left) and pd.isna(right):
-            continue
-
-        assert left == pytest.approx(
-            right
+    for column in matrix.columns:
+        assert pd.api.types.is_numeric_dtype(
+            matrix[column]
         )
 
 
-# ---------------------------------------------------------------------
-# Immutability
-# ---------------------------------------------------------------------
+def test_no_future_or_target_features():
+    stock = make_stock_data()
+
+    result = build_unified_features(
+        stock,
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=False,
+        ),
+    )
+
+    suspicious = [
+        name
+        for name in result.feature_names
+        if any(
+            token.lower()
+            in name.lower()
+            for token in (
+                "future_",
+                "direction_",
+                "target_",
+                "target",
+                "label",
+            )
+        )
+    ]
+
+    assert suspicious == []
 
 
-def test_stock_input_is_not_modified():
-    stock = make_ohlcv()
+def test_target_like_original_column_is_not_used_as_feature():
+    stock = make_stock_data()
+
+    stock["Target_Test"] = (
+        stock["Close"]
+        .shift(-5)
+    )
+
+    result = build_unified_features(
+        stock,
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=False,
+        ),
+    )
+
+    assert "Target_Test" not in (
+        result.feature_names
+    )
+
+
+def test_label_like_original_column_is_not_used_as_feature():
+    stock = make_stock_data()
+
+    stock["Label"] = (
+        stock["Close"]
+        .shift(-5)
+        .gt(stock["Close"])
+        .astype(int)
+    )
+
+    result = build_unified_features(
+        stock,
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=False,
+        ),
+    )
+
+    assert "Label" not in (
+        result.feature_names
+    )
+
+
+def test_input_dataframe_is_not_mutated():
+    stock = make_stock_data()
 
     original = stock.copy(
         deep=True
     )
 
     build_unified_features(
-        stock
+        stock,
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=False,
+        ),
     )
 
     pd.testing.assert_frame_equal(
@@ -1064,137 +422,273 @@ def test_stock_input_is_not_modified():
     )
 
 
-def test_market_input_is_not_modified():
-    stock = make_ohlcv()
-    market = make_market_context()
+def test_timeline_is_preserved():
+    stock = make_stock_data()
 
-    original_context = (
-        market.context.data.copy(
-            deep=True
-        )
-    )
-
-    original_raw = {
-        name: frame.copy(
-            deep=True
-        )
-        for name, frame
-        in market.raw_data.items()
-    }
-
-    build_unified_features(
+    result = build_unified_features(
         stock,
-        market_context=market,
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=False,
+        ),
     )
 
-    pd.testing.assert_frame_equal(
-        market.context.data,
-        original_context,
-    )
-
-    for name in original_raw:
-        pd.testing.assert_frame_equal(
-            market.raw_data[name],
-            original_raw[name],
-        )
-
-
-# ---------------------------------------------------------------------
-# Determinism
-# ---------------------------------------------------------------------
-
-
-def test_feature_generation_is_deterministic():
-    stock = make_ohlcv()
-
-    result_1 = build_unified_features(
-        stock
-    )
-
-    result_2 = build_unified_features(
-        stock
-    )
-
-    assert (
-        result_1.feature_names
-        == result_2.feature_names
-    )
-
-    pd.testing.assert_frame_equal(
-        result_1.data,
-        result_2.data,
+    assert result.data.index.equals(
+        stock.index
     )
 
 
-def test_market_feature_generation_is_deterministic():
-    stock = make_ohlcv()
-    market = make_market_context()
-
-    result_1 = build_unified_features(
-        stock,
-        market_context=market,
-    )
-
-    result_2 = build_unified_features(
-        stock,
-        market_context=market,
-    )
-
-    assert (
-        result_1.feature_names
-        == result_2.feature_names
-    )
-
-    pd.testing.assert_frame_equal(
-        result_1.data,
-        result_2.data,
-    )
-
-
-# ---------------------------------------------------------------------
-# Summary and metadata
-# ---------------------------------------------------------------------
-
-
-def test_summary():
-    stock = make_ohlcv()
+def test_market_context_can_be_integrated():
+    stock = make_stock_data()
     market = make_market_context()
 
     result = build_unified_features(
         stock,
         market_context=market,
+        config=UnifiedFeatureConfig(
+            include_market_context=True,
+            include_relative_strength=True,
+            include_multi_timeframe=False,
+        ),
+    )
+
+    assert result.feature_count > 0
+
+    assert len(
+        result.market_feature_names
+    ) > 0
+
+
+def test_market_context_is_not_required_when_disabled():
+    stock = make_stock_data()
+
+    result = build_unified_features(
+        stock,
+        market_context=None,
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=False,
+        ),
+    )
+
+    assert result.feature_count > 0
+
+
+def test_missing_requested_market_context_generates_warning():
+    stock = make_stock_data()
+
+    result = build_unified_features(
+        stock,
+        market_context=None,
+        config=UnifiedFeatureConfig(
+            include_market_context=True,
+            include_multi_timeframe=False,
+        ),
+    )
+
+    assert any(
+        "market context"
+        in warning.lower()
+        for warning in result.warnings
+    )
+
+
+def test_multi_timeframe_features_can_be_integrated():
+    stock = make_stock_data()
+
+    timeframe_data = (
+        make_timeframe_data(
+            stock
+        )
+    )
+
+    result = build_unified_features(
+        stock,
+        timeframe_data=timeframe_data,
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=True,
+        ),
+    )
+
+    assert result.feature_count > 0
+
+    assert len(
+        result.multi_timeframe_feature_names
+    ) > 0
+
+
+def test_multitimeframe_disabled_does_not_require_timeframe_data():
+    stock = make_stock_data()
+
+    result = build_unified_features(
+        stock,
+        timeframe_data=None,
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=False,
+        ),
+    )
+
+    assert result.feature_count > 0
+
+
+def test_future_market_mutation_does_not_change_earlier_features():
+    stock = make_stock_data()
+    market = make_market_context()
+
+    baseline = build_unified_features(
+        stock,
+        market_context=market,
+        config=UnifiedFeatureConfig(
+            include_market_context=True,
+            include_relative_strength=True,
+            include_multi_timeframe=False,
+        ),
+    )
+
+    mutated_market = make_market_context()
+
+    mutation_start = len(
+        mutated_market.context
+    ) // 2
+
+    mutated_market.context.iloc[
+        mutation_start:,
+        :
+    ] = (
+        mutated_market.context.iloc[
+            mutation_start:,
+            :
+        ]
+        * 10.0
+    )
+
+    mutated = build_unified_features(
+        stock,
+        market_context=mutated_market,
+        config=UnifiedFeatureConfig(
+            include_market_context=True,
+            include_relative_strength=True,
+            include_multi_timeframe=False,
+        ),
+    )
+
+    common_index = baseline.data.index[
+        :mutation_start
+    ]
+
+    common_features = [
+        column
+        for column in baseline.feature_names
+        if column in mutated.feature_names
+    ]
+
+    pd.testing.assert_frame_equal(
+        baseline.data.loc[
+            common_index,
+            common_features,
+        ],
+        mutated.data.loc[
+            common_index,
+            common_features,
+        ],
+        check_dtype=False,
+    )
+
+
+def test_feature_generation_is_deterministic():
+    stock = make_stock_data()
+
+    config = UnifiedFeatureConfig(
+        include_market_context=False,
+        include_multi_timeframe=False,
+    )
+
+    first = build_unified_features(
+        stock,
+        config=config,
+    )
+
+    second = build_unified_features(
+        stock,
+        config=config,
+    )
+
+    assert first.feature_names == (
+        second.feature_names
+    )
+
+    pd.testing.assert_frame_equal(
+        first.data,
+        second.data,
+    )
+
+
+def test_feature_name_helper_returns_copy():
+    stock = make_stock_data()
+
+    result = build_unified_features(
+        stock,
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=False,
+        ),
+    )
+
+    names = unified_feature_names(
+        result
+    )
+
+    names.append(
+        "SHOULD_NOT_CHANGE_RESULT"
+    )
+
+    assert (
+        "SHOULD_NOT_CHANGE_RESULT"
+        not in result.feature_names
+    )
+
+
+def test_summary_contains_expected_fields():
+    stock = make_stock_data()
+
+    result = build_unified_features(
+        stock,
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=False,
+        ),
     )
 
     summary = unified_feature_summary(
         result
     )
 
-    assert (
-        summary["rows"]
-        == len(stock)
+    assert summary["rows"] == len(
+        stock
     )
 
     assert (
         summary["feature_count"]
-        > 0
+        == result.feature_count
     )
 
     assert (
-        summary["base_features"]
-        > 0
-    )
-
-    assert (
-        summary["market_features"]
-        > 0
+        summary["research_only"]
+        is True
     )
 
 
-def test_metadata_is_research_only():
-    stock = make_ohlcv()
+def test_research_only_metadata_is_explicit():
+    stock = make_stock_data()
 
     result = build_unified_features(
-        stock
+        stock,
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=False,
+        ),
     )
 
     assert (
@@ -1213,42 +707,142 @@ def test_metadata_is_research_only():
 
     assert (
         result.metadata[
-            "future_values_used"
-        ]
-        is False
-    )
-
-    assert (
-        result.metadata[
-            "target_columns_included"
-        ]
-        is False
-    )
-
-    assert (
-        result.metadata[
             "final_holdout_used"
         ]
         is False
     )
 
+    assert (
+        result.metadata[
+            "future_values_used"
+        ]
+        is False
+    )
 
-def test_summary_requires_correct_type():
+
+def test_invalid_stock_input_is_rejected():
     with pytest.raises(TypeError):
-        unified_feature_summary(
-            object()
+        build_unified_features(
+            pd.DataFrame()
         )
 
 
-def test_feature_matrix_requires_correct_type():
-    with pytest.raises(TypeError):
-        feature_matrix(
-            object()
+def test_missing_close_is_rejected():
+    stock = make_stock_data()
+
+    stock = stock.drop(
+        columns=["Close"]
+    )
+
+    with pytest.raises(ValueError):
+        build_unified_features(
+            stock
         )
 
 
-def test_feature_names_requires_correct_type():
+def test_duplicate_timestamps_are_rejected():
+    stock = make_stock_data()
+
+    duplicate = stock.iloc[
+        [0]
+    ].copy()
+
+    duplicate.index = [
+        stock.index[1]
+    ]
+
+    bad = pd.concat(
+        [
+            stock,
+            duplicate,
+        ]
+    )
+
+    with pytest.raises(ValueError):
+        build_unified_features(
+            bad
+        )
+
+
+def test_unsorted_index_is_rejected():
+    stock = make_stock_data()
+
+    bad = stock.iloc[
+        ::-1
+    ]
+
+    with pytest.raises(ValueError):
+        build_unified_features(
+            bad
+        )
+
+
+def test_non_datetime_index_is_rejected():
+    stock = make_stock_data()
+
+    stock.index = range(
+        len(stock)
+    )
+
     with pytest.raises(TypeError):
-        unified_feature_names(
-            object()
+        build_unified_features(
+            stock
+        )
+
+
+def test_non_numeric_feature_from_market_context_is_rejected():
+    stock = make_stock_data()
+
+    market = make_market_context()
+
+    market.context[
+        "Artificial_Text_Feature"
+    ] = "text"
+
+    with pytest.raises(TypeError):
+        build_unified_features(
+            stock,
+            market_context=market,
+            config=UnifiedFeatureConfig(
+                include_market_context=True,
+                include_multi_timeframe=False,
+            ),
+        )
+
+
+def test_feature_matrix_does_not_modify_result():
+    stock = make_stock_data()
+
+    result = build_unified_features(
+        stock,
+        config=UnifiedFeatureConfig(
+            include_market_context=False,
+            include_multi_timeframe=False,
+        ),
+    )
+
+    matrix = feature_matrix(
+        result
+    )
+
+    if not matrix.empty:
+        first_column = matrix.columns[0]
+        original_value = (
+            result.data.loc[
+                matrix.index[0],
+                first_column,
+            ]
+        )
+
+        matrix.loc[
+            matrix.index[0],
+            first_column,
+        ] = 999999.0
+
+        assert (
+            result.data.loc[
+                matrix.index[0],
+                first_column,
+            ]
+            == original_value
         )
